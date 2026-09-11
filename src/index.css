@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+:root {
+  --sidebar-bg: #ffffff;
+  --sidebar-border: #e2e8f0;
+  --sidebar-text: #334155;
+  --sidebar-muted: #7b8794;
+  --sidebar-primary: #4f46e5;
+  --sidebar-primary-soft: #eef2ff;
+  --sidebar-active: #f1f5f9;
+  --sidebar-hover: #f8fafc;
+  --sidebar-radius: 12px;
+}

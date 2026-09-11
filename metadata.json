@@ -1,0 +1,6 @@
+{
+  "name": "EduExam - Hệ thống Khảo thí Trực tuyến",
+  "description": "Hệ thống tạo đề thi bằng AI chuẩn Công văn 7991/BGDĐT-GDTrH và GDPT 2018, quản lý ma trận, bảng đặc tả, ngân hàng câu hỏi, tổ chức kỳ thi trực tuyến và chấm điểm tự động trên Supabase PostgreSQL.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
