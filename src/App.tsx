@@ -73,6 +73,7 @@ export default function App() {
         checkAuth();
       } else {
         setCurrentProfile(null);
+        setIsAuthOpen(true);
       }
     });
 
@@ -98,8 +99,12 @@ export default function App() {
     try {
       const profile = await getCurrentProfile();
       setCurrentProfile(profile);
+      if (!profile) {
+        setIsAuthOpen(true);
+      }
     } catch (err) {
       console.error('Error fetching auth state:', err);
+      setIsAuthOpen(true);
     } finally {
       setLoadingAuth(false);
     }
@@ -200,49 +205,6 @@ export default function App() {
           onOpenMobileSidebar={() => setIsMobileSidebarOpen(true)}
         />
 
-        {/* Demo / Database Connection Notice Banner */}
-        {!isSupabaseConfigured() && (
-          <div className="bg-gradient-to-r from-indigo-50 via-purple-50 to-amber-50 border-b border-indigo-100 px-4 py-2 text-xs text-slate-700">
-            <div className="w-full max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center space-x-2">
-                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
-                <span>
-                  <strong>Chế độ Trải nghiệm (Demo):</strong>{' '}
-                  {currentProfile ? (
-                    <>
-                      Đang đăng nhập với <strong>{currentProfile.full_name}</strong> (
-                      {currentProfile.role === 'admin'
-                        ? 'Quản trị viên'
-                        : currentProfile.role === 'teacher'
-                        ? 'Giáo viên'
-                        : 'Học sinh'}
-                      ).
-                    </>
-                  ) : (
-                    <>Chưa đăng nhập tài khoản.</>
-                  )}
-                </span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setIsAuthOpen(true)}
-                  id="banner-open-auth-btn"
-                  className="px-2.5 py-1 text-xs font-semibold rounded-md bg-white border border-slate-300 hover:border-indigo-500 hover:text-indigo-600 shadow-2xs transition-colors"
-                >
-                  {currentProfile ? 'Đổi tài khoản / Đăng nhập' : 'Mở Bảng đăng nhập'}
-                </button>
-                <button
-                  onClick={() => setIsConnectionOpen(true)}
-                  id="banner-open-db-btn"
-                  className="px-2.5 py-1 text-xs font-semibold rounded-md bg-indigo-600 hover:bg-indigo-700 text-white shadow-2xs transition-colors"
-                >
-                  Cấu hình Supabase Cloud
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Workspace Body: Active View Pane */}
         <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           {currentTab === 'dashboard' && (
@@ -340,20 +302,36 @@ export default function App() {
 
       <AuthModal
         isOpen={isAuthOpen}
-        onClose={() => setIsAuthOpen(false)}
+        onClose={() => {
+          if (currentProfile) {
+            setIsAuthOpen(false);
+          }
+        }}
+        isRequired={!currentProfile}
         onAuthSuccess={(profile) => {
           if (profile) setCurrentProfile(profile);
+          setIsAuthOpen(false);
           checkAuth();
         }}
         onOpenConnectionModal={() => {
           setIsAuthOpen(false);
           setIsConnectionOpen(true);
         }}
+        onStudentDirectExam={() => {
+          setIsAuthOpen(false);
+          setJoinCodeInput('');
+          setIsJoinModalOpen(true);
+        }}
       />
 
       <JoinExamView
         isOpen={isJoinModalOpen}
-        onClose={() => setIsJoinModalOpen(false)}
+        onClose={() => {
+          setIsJoinModalOpen(false);
+          if (!currentProfile) {
+            setIsAuthOpen(true);
+          }
+        }}
         initialCode={joinCodeInput}
         currentProfile={currentProfile}
         onExamReady={(data) => {

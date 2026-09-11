@@ -173,28 +173,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
       ],
     },
-    {
-      title: 'Công cụ hệ thống',
-      roles: ['admin', 'teacher'],
-      isSystem: true,
-      items: [
-        { 
-          id: 'user-isolation-test', 
-          label: 'Kiểm thử RLS & Cô lập', 
-          icon: ShieldCheck, 
-          badge: 'Test', 
-          badgeType: 'test',
-          roles: ['admin', 'teacher'] 
-        },
-        { 
-          id: 'sql', 
-          label: 'SQL Schema & Supabase', 
-          icon: Database, 
-          badge: 'RLS', 
-          badgeType: 'rls' 
-        },
-      ],
-    },
   ];
 
   const renderBadge = (badge: string, type?: MenuItem['badgeType'], isActive?: boolean) => {
@@ -425,51 +403,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })}
         </div>
 
-        {/* 3. FIXED BOTTOM AREA: DATABASE STATUS CARD + USER PROFILE */}
+        {/* 3. FIXED BOTTOM AREA: USER PROFILE */}
         <div className="shrink-0 p-3 border-t border-slate-100 space-y-2 bg-white/95 backdrop-blur-xs">
-          {/* Database Status Card */}
-          {collapsed ? (
-            <div className="relative group flex justify-center py-1">
-              <button
-                onClick={onOpenConnectionModal}
-                className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-center text-emerald-600 hover:bg-emerald-50 transition-colors"
-                title="Supabase RLS Active"
-              >
-                <ShieldCheck className="w-5 h-5 text-emerald-600" />
-              </button>
-              <div className="absolute left-full ml-3.5 top-1/2 -translate-y-1/2 px-3 py-2 bg-slate-900 text-white text-xs rounded-xl shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none z-50">
-                <div className="font-bold flex items-center space-x-1.5">
-                  <span>PostgreSQL RLS</span>
-                  <span className="text-[10px] text-emerald-400 font-bold">● Active</span>
-                </div>
-                <p className="text-[11px] text-slate-300 mt-0.5">Bảo vệ bằng Row Level Security</p>
-              </div>
-            </div>
-          ) : (
-            <div 
-              onClick={onOpenConnectionModal}
-              className="p-2.5 bg-gradient-to-br from-slate-50 to-indigo-50/30 rounded-2xl border border-slate-200/80 text-xs text-slate-600 space-y-1 shadow-2xs hover:border-indigo-200 transition-all cursor-pointer group"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <div className="w-6 h-6 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center">
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                  </div>
-                  <span className="font-bold text-slate-800 text-[12px] group-hover:text-indigo-600 transition-colors">
-                    PostgreSQL RLS
-                  </span>
-                </div>
-                <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>Active</span>
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 leading-relaxed pl-8">
-                Dữ liệu được bảo vệ bằng Row Level Security trên Supabase Cloud.
-              </p>
-            </div>
-          )}
-
           {/* User Profile Card */}
           <div className="relative" ref={profileMenuRef}>
             {collapsed ? (
@@ -545,17 +480,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   >
                     <User className="w-3.5 h-3.5" />
                     <span>Thông tin tài khoản</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setIsProfileMenuOpen(false);
-                      if (onOpenConnectionModal) onOpenConnectionModal();
-                    }}
-                    className="w-full flex items-center space-x-2 px-3 py-2 rounded-xl text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                  >
-                    <CloudCog className="w-3.5 h-3.5" />
-                    <span>Cấu hình Supabase Cloud</span>
                   </button>
 
                   <div className="my-1 border-t border-slate-100" />

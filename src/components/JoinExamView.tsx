@@ -399,32 +399,6 @@ export const JoinExamView: React.FC<JoinExamViewProps> = ({
                   </div>
                 )}
               </div>
-
-              {/* Sample hint pills for quick demo testing */}
-              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
-                <span>Thử nhanh:</span>
-                <button
-                  type="button"
-                  onClick={() => setStudentCode('HS1001')}
-                  className="px-2 py-0.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 rounded font-mono font-semibold"
-                >
-                  HS1001 (10A1)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStudentCode('HS1002')}
-                  className="px-2 py-0.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 rounded font-mono font-semibold"
-                >
-                  HS1002 (10A1)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStudentCode('HS1006')}
-                  className="px-2 py-0.5 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 border border-slate-200 rounded font-mono font-semibold"
-                >
-                  HS1006 (10A2)
-                </button>
-              </div>
             </div>
 
             {/* Student Recognition Card */}

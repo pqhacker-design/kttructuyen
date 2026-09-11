@@ -94,34 +94,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span>Vào thi bằng mã</span>
           </button>
 
-          {/* Database / Connection Status */}
-          <button
-            onClick={onOpenConnectionModal}
-            id="nav-btn-db-status"
-            className={`flex items-center space-x-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-              isConfigured
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
-            }`}
-            title="Kiểm tra cấu hình kết nối Supabase"
-          >
-            <Database className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">
-              {isConfigured ? 'Supabase: Đã kết nối' : 'Cấu hình Supabase'}
-            </span>
-          </button>
-
-          {/* SQL Migration Quick View */}
-          <button
-            onClick={onOpenMigrationModal || onOpenConnectionModal}
-            id="nav-btn-sql-script"
-            className="hidden sm:flex items-center space-x-1 px-2.5 py-1.5 text-xs font-medium rounded-lg text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors"
-            title="Xem hướng dẫn kết nối Supabase"
-          >
-            <FileCode2 className="w-3.5 h-3.5 text-slate-500" />
-            <span>SQL Schema</span>
-          </button>
-
           {/* User Auth Info */}
           {currentProfile ? (
             <div className="flex items-center space-x-2 pl-2 border-l border-slate-200">
@@ -133,11 +105,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span className="inline-block text-[10px] font-medium px-1.5 py-0.2 rounded text-indigo-700 bg-indigo-50 border border-indigo-100 capitalize">
                     {currentProfile.role === 'teacher' ? 'Giáo viên' : currentProfile.role === 'student' ? 'Học sinh' : 'Quản trị viên'}
                   </span>
-                  {!isConfigured && (
-                    <span className="inline-block text-[10px] font-bold px-1 rounded text-amber-700 bg-amber-100">
-                      Demo
-                    </span>
-                  )}
                 </div>
               </div>
               <div className="w-9 h-9 rounded-full bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-800 font-bold text-sm shadow-2xs">

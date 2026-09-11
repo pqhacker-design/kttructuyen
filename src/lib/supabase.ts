@@ -1,19 +1,36 @@
 import { createClient, SupabaseClient, User, Session } from '@supabase/supabase-js';
 import { Profile } from '../types';
-import { DEMO_PROFILE } from '../services/mockStore';
 
 // Get credentials from Vite / Next.js compatible environment variables
 const metaEnv = (import.meta as any).env || {};
 
+export const INITIAL_ADMIN_EMAIL =
+  (typeof process !== 'undefined' && process.env?.INITIAL_ADMIN_EMAIL) ||
+  (typeof process !== 'undefined' && process.env?.VITE_INITIAL_ADMIN_EMAIL) ||
+  metaEnv.VITE_INITIAL_ADMIN_EMAIL ||
+  metaEnv.NEXT_PUBLIC_INITIAL_ADMIN_EMAIL ||
+  'admin@eduexam.com';
+
+export const INITIAL_ADMIN_PASSWORD =
+  (typeof process !== 'undefined' && process.env?.INITIAL_ADMIN_PASSWORD) ||
+  (typeof process !== 'undefined' && process.env?.VITE_INITIAL_ADMIN_PASSWORD) ||
+  metaEnv.VITE_INITIAL_ADMIN_PASSWORD ||
+  metaEnv.NEXT_PUBLIC_INITIAL_ADMIN_PASSWORD ||
+  '';
+
 const ENV_SUPABASE_URL = 
   metaEnv.VITE_SUPABASE_URL || 
   metaEnv.NEXT_PUBLIC_SUPABASE_URL || 
+  (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_URL) ||
+  (typeof process !== 'undefined' && process.env?.SUPABASE_URL) ||
   '';
 
 const ENV_SUPABASE_ANON_KEY = 
   metaEnv.VITE_SUPABASE_ANON_KEY || 
   metaEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || 
   metaEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 
+  (typeof process !== 'undefined' && process.env?.VITE_SUPABASE_ANON_KEY) ||
+  (typeof process !== 'undefined' && process.env?.SUPABASE_ANON_KEY) ||
   '';
 
 // Allow manual configuration in the preview UI with local persistence
@@ -204,7 +221,7 @@ export async function getCurrentProfile(userId?: string): Promise<Profile | null
         }
       }
     }
-    return DEMO_PROFILE;
+    return null;
   }
 
   try {
@@ -225,18 +242,31 @@ export async function getCurrentProfile(userId?: string): Promise<Profile | null
       // If profile row doesn't exist yet, construct a fallback from auth user
       const user = await getCurrentUser();
       if (user && user.id === uid) {
+        const userEmail = (user.email || '').toLowerCase();
+        const isAdmin = userEmail === INITIAL_ADMIN_EMAIL.toLowerCase() || user.user_metadata?.role === 'admin';
         return {
           id: user.id,
           user_id: user.id,
           full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'Người dùng',
           email: user.email || '',
-          role: (user.user_metadata?.role as any) || 'teacher',
+          role: isAdmin ? 'admin' : ((user.user_metadata?.role as any) || 'teacher'),
           status: 'active',
           created_at: user.created_at,
           updated_at: user.created_at,
         };
       }
       return null;
+    }
+
+    // If profile exists, check if email matches INITIAL_ADMIN_EMAIL and elevate to admin if needed
+    if (data && data.email && data.email.toLowerCase() === INITIAL_ADMIN_EMAIL.toLowerCase() && data.role !== 'admin') {
+      data.role = 'admin';
+      // Attempt to sync to database
+      try {
+        await supabase.from('profiles').update({ role: 'admin' }).eq('id', data.id);
+      } catch (e) {
+        // ignore
+      }
     }
 
     return data as Profile;

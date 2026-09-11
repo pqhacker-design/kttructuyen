@@ -1,20 +1,22 @@
-import React, { useState } from 'react';
-import { X, LogIn, UserPlus, Mail, Lock, User, Shield, AlertCircle, CheckCircle2, Database, KeyRound, Sparkles } from 'lucide-react';
-import { getSupabase, getCurrentProfile, isSupabaseConfigured, setActiveUserProfile } from '../lib/supabase';
+import React, { useState, useEffect } from 'react';
+import { LogIn, UserPlus, Mail, Lock, User, Shield, AlertCircle, CheckCircle2, GraduationCap, ArrowRight } from 'lucide-react';
+import { getSupabase, getCurrentProfile, isSupabaseConfigured, setActiveUserProfile, INITIAL_ADMIN_EMAIL, INITIAL_ADMIN_PASSWORD } from '../lib/supabase';
 import { Profile, UserRole } from '../types';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAuthSuccess: (profile: Profile) => void;
-  onOpenConnectionModal?: () => void;
+  isRequired?: boolean;
+  onStudentDirectExam?: () => void;
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
   onClose,
   onAuthSuccess,
-  onOpenConnectionModal,
+  isRequired = false,
+  onStudentDirectExam,
 }) => {
   if (!isOpen) return null;
 
@@ -28,58 +30,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const isDbConfigured = isSupabaseConfigured();
 
-  const handleInstantDemoLogin = (type: 'admin' | 'toan' | 'van' | 'student') => {
-    let demoProfile: Profile;
-    if (type === 'admin') {
-      demoProfile = {
-        id: 'admin-001',
-        user_id: 'admin-001',
-        full_name: 'Quản trị viên Hệ thống (Admin)',
-        email: 'admin@eduexam.com',
-        role: 'admin',
-        status: 'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-    } else if (type === 'toan') {
-      demoProfile = {
-        id: 'demo-teacher-001',
-        user_id: 'demo-teacher-001',
-        full_name: 'Thầy Nguyễn Văn An (Toán)',
-        email: 'giaovien.toan@eduexam.edu.vn',
-        role: 'teacher',
-        status: 'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-    } else if (type === 'van') {
-      demoProfile = {
-        id: 'demo-teacher-002',
-        user_id: 'demo-teacher-002',
-        full_name: 'Cô Trần Thị Mai (Văn)',
-        email: 'giaovien.van@eduexam.edu.vn',
-        role: 'teacher',
-        status: 'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-    } else {
-      demoProfile = {
-        id: 'demo-student-001',
-        user_id: 'demo-student-001',
-        full_name: 'Em Lê Văn Bình (Học sinh 12A1)',
-        email: 'hocsinh.demo@eduexam.edu.vn',
-        role: 'student',
-        status: 'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+  // If initial admin is configured in env, pre-fill email if empty for convenience
+  useEffect(() => {
+    if (INITIAL_ADMIN_EMAIL && !email) {
+      setEmail(INITIAL_ADMIN_EMAIL);
     }
-
-    setActiveUserProfile(demoProfile);
-    onAuthSuccess(demoProfile);
-    onClose();
-  };
+    if (INITIAL_ADMIN_PASSWORD && !password) {
+      setPassword(INITIAL_ADMIN_PASSWORD);
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -90,115 +49,135 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     const supabase = getSupabase();
 
     try {
+      if (!isDbConfigured) {
+        throw new Error('Chưa cấu hình Supabase Cloud. Vui lòng thêm biến môi trường VITE_SUPABASE_URL và VITE_SUPABASE_ANON_KEY vào Vercel (hoặc .env) để đăng nhập.');
+      }
+
+      const cleanEmail = email.trim().toLowerCase();
+
       if (mode === 'login') {
-        const cleanEmail = email.trim().toLowerCase();
-
-        // 1. Check quick admin hardcoded credential in demo/fallback
-        if (cleanEmail === 'admin@eduexam.com' && (password === '300506' || !isDbConfigured)) {
-          const adminProfile: Profile = {
-            id: 'admin-001',
-            user_id: 'admin-001',
-            full_name: 'Quản trị viên Hệ thống (Admin)',
-            email: 'admin@eduexam.com',
-            role: 'admin',
-            status: 'active',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          };
-          setActiveUserProfile(adminProfile);
-          onAuthSuccess(adminProfile);
-          onClose();
-          return;
-        }
-
-        // 2. Check demo accounts fallback
-        if (cleanEmail === 'giaovien.toan@eduexam.edu.vn' || cleanEmail === 'giaovien.van@eduexam.edu.vn' || cleanEmail === 'hocsinh.demo@eduexam.edu.vn') {
-          const isToan = cleanEmail.includes('toan');
-          const isVan = cleanEmail.includes('van');
-          const demoProfile: Profile = {
-            id: isToan ? 'demo-teacher-001' : isVan ? 'demo-teacher-002' : 'demo-student-001',
-            user_id: isToan ? 'demo-teacher-001' : isVan ? 'demo-teacher-002' : 'demo-student-001',
-            full_name: isToan ? 'Thầy Nguyễn Văn An (Toán)' : isVan ? 'Cô Trần Thị Mai (Văn)' : 'Em Lê Văn Bình (Học sinh)',
-            email: cleanEmail,
-            role: (isToan || isVan) ? 'teacher' : 'student',
-            status: 'active',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          };
-          setActiveUserProfile(demoProfile);
-          onAuthSuccess(demoProfile);
-          onClose();
-          return;
-        }
-
-        // 3. Supabase Auth
-        if (!isDbConfigured) {
-          throw new Error('Chưa cấu hình Supabase Cloud. Hãy dùng các tài khoản mẫu bên dưới hoặc bấm nút "Cấu hình Supabase" để kết nối.');
-        }
-
+        // Step 1: Attempt standard Supabase login
         const { data, error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
+          email: cleanEmail,
           password,
         });
 
+        // Step 2: Handle login failure
         if (error) {
-          if (error.message.includes('Invalid login credentials')) {
-            throw new Error('Email hoặc mật khẩu không chính xác.');
+          const isInvalidCredentials = error.message.includes('Invalid login credentials');
+          const isAdminAttempt = cleanEmail === INITIAL_ADMIN_EMAIL.toLowerCase();
+
+          // If it is the initial admin account or the account doesn't exist yet on a fresh Supabase instance,
+          // automatically attempt first-time bootstrap registration via Supabase Auth
+          if (isInvalidCredentials && isAdminAttempt) {
+            console.info('[Auth] Admin credentials not found in Supabase Auth. Attempting auto-bootstrap registration...');
+            const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+              email: cleanEmail,
+              password,
+              options: {
+                data: {
+                  full_name: 'Quản trị viên Hệ thống',
+                  role: 'admin',
+                },
+              },
+            });
+
+            if (!signUpError && signUpData.user) {
+              if (signUpData.session) {
+                // User was registered and auto-confirmed!
+                const adminProfile: Profile = {
+                  id: signUpData.user.id,
+                  user_id: signUpData.user.id,
+                  full_name: 'Quản trị viên Hệ thống',
+                  email: cleanEmail,
+                  role: 'admin',
+                  status: 'active',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                };
+
+                // Upsert to profiles table
+                try {
+                  await supabase.from('profiles').upsert([adminProfile]);
+                } catch (pe) {
+                  console.warn('[Auth] Upsert admin profile notice:', pe);
+                }
+
+                setActiveUserProfile(adminProfile);
+                onAuthSuccess(adminProfile);
+                onClose();
+                return;
+              } else {
+                // Email confirmation is required by Supabase project settings
+                setInfoMsg('Tài khoản Quản trị viên đã được tạo trên Supabase! Do dự án đang bật "Confirm email", vui lòng kiểm tra email để bấm link kích hoạt, hoặc vào Supabase Dashboard > Authentication > Providers > Email để tắt "Confirm email" rồi đăng nhập lại.');
+                return;
+              }
+            }
+          }
+
+          if (isInvalidCredentials) {
+            throw new Error('Email hoặc mật khẩu không chính xác. Nếu là tài khoản mới, bạn có thể bấm tab "Đăng ký" bên trên.');
           }
           if (error.message.includes('Email not confirmed')) {
-            throw new Error('Email chưa được xác nhận. Vui lòng kiểm tra hộp thư hoặc tắt Email Confirmation trong Supabase Auth Settings.');
+            throw new Error('Email chưa được xác nhận. Vui lòng kiểm tra hộp thư hoặc vào Supabase Dashboard > Authentication > Providers > Email để tắt "Confirm email".');
           }
           throw new Error(error.message);
         }
 
+        // Step 3: Login succeeded
         if (data.user) {
-          const profile = await getCurrentProfile(data.user.id);
-          if (profile) {
-            if (profile.status === 'locked') {
-              throw new Error('Tài khoản của bạn đã bị KHÓA bởi Quản trị viên hệ thống. Vui lòng liên hệ hỗ trợ.');
-            }
-            if (profile.status === 'inactive') {
-              throw new Error('Tài khoản của bạn đang tạm ngừng hoạt động.');
-            }
-            setActiveUserProfile(profile);
-            onAuthSuccess(profile);
-            onClose();
-          } else {
-            // Fallback profile
-            const fallback: Profile = {
+          let profile = await getCurrentProfile(data.user.id);
+          
+          if (!profile) {
+            // Fallback profile row
+            const isAdmin = cleanEmail === INITIAL_ADMIN_EMAIL.toLowerCase() || data.user.user_metadata?.role === 'admin';
+            profile = {
               id: data.user.id,
               user_id: data.user.id,
-              full_name: data.user.user_metadata?.full_name || email.split('@')[0],
-              email: data.user.email || email,
-              role: (data.user.user_metadata?.role as UserRole) || 'teacher',
+              full_name: data.user.user_metadata?.full_name || cleanEmail.split('@')[0],
+              email: data.user.email || cleanEmail,
+              role: isAdmin ? 'admin' : ((data.user.user_metadata?.role as UserRole) || 'teacher'),
               status: 'active',
               created_at: data.user.created_at,
               updated_at: data.user.created_at,
             };
-            setActiveUserProfile(fallback);
-            onAuthSuccess(fallback);
-            onClose();
+
+            try {
+              await supabase.from('profiles').upsert([profile]);
+            } catch (err) {
+              // Ignore profile insert errors
+            }
           }
+
+          if (profile.status === 'locked') {
+            throw new Error('Tài khoản của bạn đã bị KHÓA bởi Quản trị viên hệ thống. Vui lòng liên hệ hỗ trợ.');
+          }
+          if (profile.status === 'inactive') {
+            throw new Error('Tài khoản của bạn đang tạm ngừng hoạt động.');
+          }
+
+          setActiveUserProfile(profile);
+          onAuthSuccess(profile);
+          onClose();
         }
       } else if (mode === 'register') {
-        if (!isDbConfigured) {
-          throw new Error('Chưa kết nối Supabase Cloud để tạo tài khoản thật. Vui lòng cấu hình URL & Key trước.');
-        }
-
+        // Register new account with Supabase
+        const targetRole = cleanEmail === INITIAL_ADMIN_EMAIL.toLowerCase() ? 'admin' : role;
+        
         const { data, error } = await supabase.auth.signUp({
-          email: email.trim(),
+          email: cleanEmail,
           password,
           options: {
             data: {
-              full_name: fullName.trim() || email.split('@')[0],
-              role,
+              full_name: fullName.trim() || cleanEmail.split('@')[0],
+              role: targetRole,
             },
           },
         });
 
         if (error) {
           if (error.message.includes('User already registered')) {
-            throw new Error('Email này đã được đăng ký tài khoản. Vui lòng đăng nhập.');
+            throw new Error('Email này đã được đăng ký tài khoản trên Supabase. Vui lòng chuyển sang tab Đăng nhập.');
           }
           if (error.message.includes('Password should be at least')) {
             throw new Error('Mật khẩu phải có độ dài ít nhất 6 ký tự.');
@@ -207,30 +186,34 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
 
         if (data.user) {
-          // If auto-confirmed
+          const newProfile: Profile = {
+            id: data.user.id,
+            user_id: data.user.id,
+            full_name: fullName.trim() || cleanEmail.split('@')[0],
+            email: data.user.email || cleanEmail,
+            role: targetRole,
+            status: 'active',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+
+          try {
+            await supabase.from('profiles').upsert([newProfile]);
+          } catch (pe) {
+            console.warn('[Register] Profile upsert notice:', pe);
+          }
+
           if (data.session) {
-            const profile: Profile = {
-              id: data.user.id,
-              user_id: data.user.id,
-              full_name: fullName.trim() || email.split('@')[0],
-              email: data.user.email || email,
-              role,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            };
-            setActiveUserProfile(profile);
-            onAuthSuccess(profile);
+            setActiveUserProfile(newProfile);
+            onAuthSuccess(newProfile);
             onClose();
           } else {
-            setInfoMsg('Đăng ký tài khoản thành công! Nếu dự án Supabase của bạn bật xác nhận email, vui lòng kiểm tra hộp thư đến.');
+            setInfoMsg('Đăng ký tài khoản thành công! Nếu dự án Supabase bật xác nhận email, vui lòng kiểm tra hộp thư đến. Sau đó đăng nhập lại.');
             setMode('login');
           }
         }
       } else if (mode === 'forgot') {
-        if (!isDbConfigured) {
-          throw new Error('Chưa kết nối Supabase Cloud.');
-        }
-        const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+        const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail);
         if (error) throw new Error(error.message);
         setInfoMsg('Đã gửi email khôi phục mật khẩu. Vui lòng kiểm tra hộp thư.');
         setMode('login');
@@ -243,29 +226,31 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-      <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="px-6 py-5 bg-slate-900 text-white flex items-center justify-between">
-          <div className="flex items-center space-x-2.5">
-            <div className="p-2 bg-indigo-500/20 rounded-lg text-indigo-400">
-              <Shield className="w-5 h-5" />
+        <div className="px-6 py-6 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex items-center justify-between border-b border-slate-800">
+          <div className="flex items-center space-x-3">
+            <div className="w-11 h-11 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-500/30">
+              <GraduationCap className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="font-bold text-base text-white">
-                {mode === 'login' ? 'Đăng nhập hệ thống' : mode === 'register' ? 'Đăng ký tài khoản mới' : 'Khôi phục mật khẩu'}
+              <h3 className="font-bold text-base text-white tracking-tight">
+                {mode === 'login' ? 'Đăng nhập EduExam' : mode === 'register' ? 'Đăng ký tài khoản' : 'Khôi phục mật khẩu'}
               </h3>
-              <p className="text-xs text-slate-400">
-                {isDbConfigured ? 'Supabase Authentication (Cloud)' : 'Chế độ Trải nghiệm (Demo & Supabase)'}
+              <p className="text-xs text-slate-300 mt-0.5">
+                Nền tảng Quản lý & Thi Trực tuyến
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          {!isRequired && (
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+            >
+              ✕
+            </button>
+          )}
         </div>
 
         {/* Tab switch */}
@@ -289,7 +274,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   : 'border-transparent text-slate-500 hover:text-slate-800'
               }`}
             >
-              Đăng ký
+              Đăng ký tài khoản
             </button>
           </div>
         )}
@@ -322,15 +307,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     required
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
-                    placeholder="Nguyễn Văn A"
-                    className="w-full pl-9 pr-3.5 py-2 text-sm rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                    placeholder="Ví dụ: Thầy Trần Quang Hưng"
+                    className="w-full pl-9 pr-3.5 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Vai trò (Role)
+                  Vai trò của bạn
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
@@ -372,7 +357,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="admin@eduexam.com hoặc email giáo viên"
-                className="w-full pl-9 pr-3.5 py-2 text-sm rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                className="w-full pl-9 pr-3.5 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
               />
             </div>
           </div>
@@ -383,7 +368,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <label className="text-xs font-semibold text-slate-700">
                   Mật khẩu
                 </label>
-                {mode === 'login' && isDbConfigured && (
+                {mode === 'login' && (
                   <button
                     type="button"
                     onClick={() => { setMode('forgot'); setErrorMsg(null); }}
@@ -401,7 +386,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full pl-9 pr-3.5 py-2 text-sm rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  className="w-full pl-9 pr-3.5 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
             </div>
@@ -410,10 +395,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-xs transition-colors flex items-center justify-center space-x-2"
+            className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-xs transition-colors flex items-center justify-center space-x-2 mt-2"
           >
             {loading ? (
-              <span>Đang xử lý...</span>
+              <span>Đang kết nối Supabase...</span>
             ) : mode === 'login' ? (
               <>
                 <LogIn className="w-4 h-4" />
@@ -429,78 +414,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             )}
           </button>
 
-          {/* Quick 1-Click Login Section */}
-          {mode === 'login' && (
-            <div className="pt-3 border-t border-slate-100 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wide flex items-center space-x-1">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                  <span>Đăng nhập nhanh 1-Click (Demo):</span>
-                </span>
-                <span className="text-[10px] text-slate-400">Không cần gõ mật khẩu</span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleInstantDemoLogin('admin')}
-                  className="p-2 text-left bg-purple-50 hover:bg-purple-100 text-purple-900 rounded-lg border border-purple-200 transition-colors"
-                >
-                  <div className="font-bold text-xs flex items-center space-x-1">
-                    <span>👑 Quản trị viên (Admin)</span>
-                  </div>
-                  <div className="text-[10px] text-purple-600 font-mono">admin@eduexam.com</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleInstantDemoLogin('toan')}
-                  className="p-2 text-left bg-blue-50 hover:bg-blue-100 text-blue-900 rounded-lg border border-blue-200 transition-colors"
-                >
-                  <div className="font-bold text-xs flex items-center space-x-1">
-                    <span>📐 Thầy An (Toán)</span>
-                  </div>
-                  <div className="text-[10px] text-blue-600 font-mono">giaovien.toan@...</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleInstantDemoLogin('van')}
-                  className="p-2 text-left bg-emerald-50 hover:bg-emerald-100 text-emerald-900 rounded-lg border border-emerald-200 transition-colors"
-                >
-                  <div className="font-bold text-xs flex items-center space-x-1">
-                    <span>📖 Cô Mai (Văn)</span>
-                  </div>
-                  <div className="text-[10px] text-emerald-600 font-mono">giaovien.van@...</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleInstantDemoLogin('student')}
-                  className="p-2 text-left bg-amber-50 hover:bg-amber-100 text-amber-900 rounded-lg border border-amber-200 transition-colors"
-                >
-                  <div className="font-bold text-xs flex items-center space-x-1">
-                    <span>🎓 Em Bình (Học sinh)</span>
-                  </div>
-                  <div className="text-[10px] text-amber-600 font-mono">hocsinh.demo@...</div>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Database Setup Helper Link */}
-          {onOpenConnectionModal && (
-            <div className="pt-2 border-t border-slate-100 text-center">
+          {/* Student direct entry shortcut */}
+          {onStudentDirectExam && (
+            <div className="pt-3 border-t border-slate-100 text-center">
               <button
                 type="button"
                 onClick={() => {
-                  onClose();
-                  onOpenConnectionModal();
+                  if (!isRequired) onClose();
+                  onStudentDirectExam();
                 }}
-                className="inline-flex items-center space-x-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-semibold"
+                className="inline-flex items-center space-x-1.5 text-xs text-slate-600 hover:text-indigo-600 font-medium py-1 transition-colors"
               >
-                <Database className="w-3.5 h-3.5" />
-                <span>{isDbConfigured ? 'Kiểm tra kết nối Supabase Cloud' : 'Nhập URL & Anon Key Supabase trực tiếp tại đây'}</span>
+                <span>Bạn là Học sinh? Vào thi trực tiếp bằng Mã phòng thi</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
@@ -509,4 +435,3 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     </div>
   );
 };
-
