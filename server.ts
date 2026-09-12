@@ -23,10 +23,10 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
-// Lazy initialize Google GenAI with required headers
-function getGenAIClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.trim() === '') {
+// Initialize Google GenAI with user-supplied API key (enforce per-user API key)
+function getGenAIClient(userApiKey?: string): GoogleGenAI | null {
+  const apiKey = userApiKey?.trim();
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === '') {
     return null;
   }
   return new GoogleGenAI({
@@ -105,9 +105,38 @@ async function callGeminiWithFallback(
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    ai_configured: !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY',
+    per_user_api_key_required: true,
     timestamp: new Date().toISOString(),
   });
+});
+
+// POST /api/ai/test-key - Verify user-supplied Gemini API key
+app.post('/api/ai/test-key', async (req, res) => {
+  try {
+    const userApiKey = (req.body?.apiKey || (req.headers['x-gemini-api-key'] as string))?.trim();
+    if (!userApiKey) {
+      return res.status(400).json({ success: false, error: 'Vui lòng nhập API Key để kiểm tra.' });
+    }
+    const ai = getGenAIClient(userApiKey);
+    if (!ai) {
+      return res.status(400).json({ success: false, error: 'API Key không hợp lệ.' });
+    }
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: 'Respond with exactly one word: READY',
+    });
+    return res.json({
+      success: true,
+      message: 'Kết nối thành công! API Key của bạn hợp lệ và sẵn sàng sử dụng.',
+      preview: response.text?.trim() || 'READY',
+    });
+  } catch (err: any) {
+    console.warn('[AI Test Key] Error:', err?.message || err);
+    return res.status(400).json({
+      success: false,
+      error: err?.message || 'API Key không hợp lệ hoặc không có quyền truy cập Gemini API.',
+    });
+  }
 });
 
 // POST /api/ai/generate-exam
@@ -123,13 +152,24 @@ app.post('/api/ai/generate-exam', async (req, res) => {
       structure,
       regulation,
       customPrompt,
+      apiKey,
     } = req.body;
 
-    const ai = getGenAIClient();
+    const userApiKey = (req.headers['x-gemini-api-key'] as string) || apiKey;
+    if (!userApiKey || typeof userApiKey !== 'string' || !userApiKey.trim()) {
+      return res.status(400).json({
+        error: 'Bắt buộc người dùng tự nhập API Key để ra đề, không sử dụng chung API hệ thống. Vui lòng mở Cài đặt API để nhập khóa của bạn.',
+        requiresApiKey: true,
+        fallback: false,
+      });
+    }
+
+    const ai = getGenAIClient(userApiKey);
     if (!ai) {
-      return res.status(503).json({
-        error: 'GEMINI_API_KEY chưa được cấu hình trên server. Sử dụng bộ tạo chuẩn quy tắc sư phạm tích hợp.',
-        fallback: true,
+      return res.status(400).json({
+        error: 'API Key người dùng không hợp lệ hoặc bị trống. Vui lòng kiểm tra lại trong Cài đặt API.',
+        requiresApiKey: true,
+        fallback: false,
       });
     }
 
@@ -285,10 +325,18 @@ ${sampleStatementsJson}
 // POST /api/ai/regenerate-question
 app.post('/api/ai/regenerate-question', async (req, res) => {
   try {
-    const { question, subjectId, grade, topic } = req.body;
-    const ai = getGenAIClient();
+    const { question, subjectId, grade, topic, apiKey } = req.body;
+    const userApiKey = (req.headers['x-gemini-api-key'] as string) || apiKey;
+    if (!userApiKey || typeof userApiKey !== 'string' || !userApiKey.trim()) {
+      return res.status(400).json({
+        success: false,
+        requiresApiKey: true,
+        error: 'Bắt buộc nhập API Key để tạo lại câu hỏi bằng AI. Vui lòng cấu hình trong Cài đặt API.',
+      });
+    }
+    const ai = getGenAIClient(userApiKey);
     if (!ai) {
-      return res.json({ success: false, fallback: true, error: 'GEMINI_API_KEY missing' });
+      return res.status(400).json({ success: false, requiresApiKey: true, error: 'API Key không hợp lệ.' });
     }
 
     const prompt = `
@@ -313,18 +361,26 @@ YÊU CẦU:
     const parsed = JSON.parse(cleaned);
     return res.json({ success: true, ...parsed });
   } catch (err: any) {
-    console.warn('[AI Service] Regenerate question fallback:', err?.message || err);
-    return res.json({ success: false, fallback: true, error: err?.message || 'AI bận' });
+    console.warn('[AI Service] Regenerate question error:', err?.message || err);
+    return res.status(500).json({ success: false, error: err?.message || 'Không thể tạo lại câu hỏi.' });
   }
 });
 
 // POST /api/ai/regenerate-essay-subitem
 app.post('/api/ai/regenerate-essay-subitem', async (req, res) => {
   try {
-    const { question, subItemIndex, subjectId, grade, topic } = req.body;
-    const ai = getGenAIClient();
+    const { question, subItemIndex, subjectId, grade, topic, apiKey } = req.body;
+    const userApiKey = (req.headers['x-gemini-api-key'] as string) || apiKey;
+    if (!userApiKey || typeof userApiKey !== 'string' || !userApiKey.trim()) {
+      return res.status(400).json({
+        success: false,
+        requiresApiKey: true,
+        error: 'Bắt buộc nhập API Key để tạo lại ý tự luận bằng AI. Vui lòng cấu hình trong Cài đặt API.',
+      });
+    }
+    const ai = getGenAIClient(userApiKey);
     if (!ai) {
-      return res.json({ success: false, fallback: true, error: 'GEMINI_API_KEY missing' });
+      return res.status(400).json({ success: false, requiresApiKey: true, error: 'API Key không hợp lệ.' });
     }
 
     const currentSub = question?.sub_items?.[subItemIndex];

@@ -28,6 +28,7 @@ import {
   deleteUser, 
   fetchAuditLogs 
 } from '../services/userService';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface AdminUsersViewProps {
   currentProfile: Profile | null;
@@ -50,6 +51,20 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
   const [isResetPassOpen, setIsResetPassOpen] = useState(false);
   const [selectedUserForPass, setSelectedUserForPass] = useState<AdminUserItem | null>(null);
   const [newPasswordInput, setNewPasswordInput] = useState('');
+
+  // Delete & Status Confirm Modal states (No window.confirm to avoid iframe blocking)
+  const [userToDelete, setUserToDelete] = useState<AdminUserItem | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [blockedDeleteInfo, setBlockedDeleteInfo] = useState<{
+    user: AdminUserItem;
+    message: string;
+    dependencies?: any;
+  } | null>(null);
+  const [statusTargetUser, setStatusTargetUser] = useState<{
+    user: AdminUserItem;
+    newStatus: 'active' | 'inactive' | 'locked';
+  } | null>(null);
+  const [isChangingStatus, setIsChangingStatus] = useState(false);
 
   // Form states
   const [newUserEmail, setNewUserEmail] = useState('');
@@ -111,18 +126,25 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
     }
   };
 
-  const handleToggleStatus = async (user: AdminUserItem, newStatus: 'active' | 'inactive' | 'locked') => {
-    const actionName = newStatus === 'locked' ? 'Khóa' : newStatus === 'active' ? 'Kích hoạt' : 'Tắt';
-    if (!window.confirm(`Bạn có chắc chắn muốn chuyển trạng thái tài khoản ${user.email} sang "${actionName}"?`)) {
-      return;
-    }
-
+  const handleConfirmChangeStatus = async () => {
+    if (!statusTargetUser) return;
+    setIsChangingStatus(true);
     try {
-      await changeUserStatus(user.user_id || user.id, newStatus, currentProfile?.email);
-      setFeedbackMsg({ type: 'success', text: `Đã chuyển tài khoản ${user.email} sang trạng thái: ${newStatus}.` });
+      await changeUserStatus(
+        statusTargetUser.user.user_id || statusTargetUser.user.id,
+        statusTargetUser.newStatus,
+        currentProfile?.email
+      );
+      setFeedbackMsg({
+        type: 'success',
+        text: `Đã chuyển tài khoản ${statusTargetUser.user.email} sang trạng thái: ${statusTargetUser.newStatus}.`,
+      });
+      setStatusTargetUser(null);
       loadData();
     } catch (err: any) {
       setFeedbackMsg({ type: 'error', text: err.message || 'Không thể cập nhật trạng thái.' });
+    } finally {
+      setIsChangingStatus(false);
     }
   };
 
@@ -144,27 +166,35 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
     }
   };
 
-  const handleDeleteUser = async (user: AdminUserItem) => {
-    if (!window.confirm(`CẢNH BÁO BẢO MẬT: Bạn có chắc chắn muốn xóa tài khoản ${user.email}?`)) {
-      return;
-    }
+  const handleConfirmDelete = async (force = false) => {
+    const target = userToDelete || blockedDeleteInfo?.user;
+    if (!target) return;
 
+    setIsDeletingUser(true);
     try {
-      const res = await deleteUser(user.user_id || user.id, false, currentProfile?.email);
-      if (res.blocked) {
-        // Show dependency notice
-        const force = window.confirm(`${res.message}\n\nBạn có muốn XÓA BẮT BUỘC (Force Delete) toàn bộ tài khoản và các dữ liệu liên quan không?`);
-        if (force) {
-          await deleteUser(user.user_id || user.id, true, currentProfile?.email);
-          setFeedbackMsg({ type: 'success', text: `Đã xóa bắt buộc tài khoản ${user.email}.` });
-          loadData();
-        }
+      const res = await deleteUser(target.user_id || target.id, force, currentProfile?.email);
+      if (res.blocked && !force) {
+        setUserToDelete(null);
+        setBlockedDeleteInfo({
+          user: target,
+          message: res.message || 'Người dùng này đang có dữ liệu trong hệ thống.',
+          dependencies: res.dependencies,
+        });
       } else {
-        setFeedbackMsg({ type: 'success', text: `Đã xóa tài khoản ${user.email} an toàn.` });
+        setFeedbackMsg({
+          type: 'success',
+          text: force
+            ? `Đã xóa bắt buộc tài khoản ${target.email} cùng toàn bộ dữ liệu liên quan.`
+            : `Đã xóa tài khoản ${target.email} an toàn thành công!`,
+        });
+        setUserToDelete(null);
+        setBlockedDeleteInfo(null);
         loadData();
       }
     } catch (err: any) {
       setFeedbackMsg({ type: 'error', text: err.message || 'Không thể xóa tài khoản.' });
+    } finally {
+      setIsDeletingUser(false);
     }
   };
 
@@ -405,7 +435,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                             {/* Lock / Unlock status */}
                             {user.status === 'locked' ? (
                               <button
-                                onClick={() => handleToggleStatus(user, 'active')}
+                                onClick={() => setStatusTargetUser({ user, newStatus: 'active' })}
                                 title="Mở khóa tài khoản"
                                 className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                               >
@@ -413,7 +443,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                               </button>
                             ) : (
                               <button
-                                onClick={() => handleToggleStatus(user, 'locked')}
+                                onClick={() => setStatusTargetUser({ user, newStatus: 'locked' })}
                                 disabled={isSelf}
                                 title={isSelf ? 'Không thể tự khóa tài khoản của mình' : 'Khóa tài khoản'}
                                 className="p-1.5 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors disabled:opacity-40"
@@ -424,7 +454,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
 
                             {/* Delete */}
                             <button
-                              onClick={() => handleDeleteUser(user)}
+                              onClick={() => setUserToDelete(user)}
                               disabled={isSelf}
                               title={isSelf ? 'Không thể xóa tài khoản của mình' : 'Xóa tài khoản'}
                               className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors disabled:opacity-40"
@@ -663,6 +693,108 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Standard Delete Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={!!userToDelete}
+        title="Xác nhận xóa tài khoản người dùng"
+        message={`Bạn có chắc chắn muốn xóa tài khoản "${userToDelete?.full_name}" (${userToDelete?.email})?`}
+        confirmLabel="Xóa tài khoản"
+        cancelLabel="Hủy bỏ"
+        variant="danger"
+        loading={isDeletingUser}
+        onConfirm={() => handleConfirmDelete(false)}
+        onCancel={() => setUserToDelete(null)}
+      />
+
+      {/* Status Change Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={!!statusTargetUser}
+        title={statusTargetUser?.newStatus === 'locked' ? 'Khóa tài khoản' : 'Kích hoạt tài khoản'}
+        message={`Bạn có chắc muốn chuyển tài khoản "${statusTargetUser?.user.full_name}" sang trạng thái: "${
+          statusTargetUser?.newStatus === 'locked' ? 'Khóa (locked)' : 'Hoạt động (active)'
+        }"?`}
+        confirmLabel={statusTargetUser?.newStatus === 'locked' ? 'Khóa tài khoản' : 'Kích hoạt'}
+        cancelLabel="Hủy bỏ"
+        variant={statusTargetUser?.newStatus === 'locked' ? 'warning' : 'info'}
+        loading={isChangingStatus}
+        onConfirm={handleConfirmChangeStatus}
+        onCancel={() => setStatusTargetUser(null)}
+      />
+
+      {/* Blocked Dependency Alert Modal (Force Delete option) */}
+      {blockedDeleteInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-amber-200 space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start space-x-3.5">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900 leading-tight">
+                  Tài khoản đang có dữ liệu liên kết
+                </h3>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Tài khoản <span className="font-semibold text-slate-900">{blockedDeleteInfo.user.email}</span> hiện đang sở hữu:
+                </p>
+                {blockedDeleteInfo.dependencies && (
+                  <div className="mt-2 grid grid-cols-3 gap-2 bg-amber-50/70 p-2.5 rounded-xl border border-amber-200 text-center">
+                    <div>
+                      <span className="text-xs font-bold text-slate-800">{blockedDeleteInfo.dependencies.classCount || 0}</span>
+                      <p className="text-[10px] text-slate-500">Lớp học</p>
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-800">{blockedDeleteInfo.dependencies.examCount || 0}</span>
+                      <p className="text-[10px] text-slate-500">Đề thi</p>
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-slate-800">{blockedDeleteInfo.dependencies.questionCount || 0}</span>
+                      <p className="text-[10px] text-slate-500">Câu hỏi</p>
+                    </div>
+                  </div>
+                )}
+                <p className="text-xs text-slate-500 mt-2">
+                  Để đảm bảo an toàn cho dữ liệu khảo thí, khuyến nghị chuyển sang trạng thái <strong>Khóa (locked)</strong>. Nếu bạn vẫn muốn xóa toàn bộ, hãy chọn <strong>Xóa bắt buộc</strong>.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setBlockedDeleteInfo(null)}
+                disabled={isDeletingUser}
+                className="w-full sm:w-auto px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const target = blockedDeleteInfo.user;
+                  await changeUserStatus(target.user_id || target.id, 'locked', currentProfile?.email);
+                  setBlockedDeleteInfo(null);
+                  setFeedbackMsg({ type: 'success', text: `Đã khóa tài khoản ${target.email} để bảo toàn dữ liệu.` });
+                  loadData();
+                }}
+                disabled={isDeletingUser}
+                className="w-full sm:w-auto px-4 py-2 text-xs font-semibold text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-xl flex items-center justify-center space-x-1"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Khóa tài khoản thay thế</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleConfirmDelete(true)}
+                disabled={isDeletingUser}
+                className="w-full sm:w-auto px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs flex items-center justify-center space-x-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isDeletingUser ? 'Đang xóa...' : 'Xóa bắt buộc'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

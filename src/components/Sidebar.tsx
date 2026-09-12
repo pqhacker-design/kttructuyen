@@ -48,6 +48,7 @@ export interface SidebarProps {
   onCloseMobile?: () => void;
   currentProfile?: Profile | null;
   onOpenAuth?: () => void;
+  onOpenChangePassword?: () => void;
   onOpenConnectionModal?: () => void;
   onSignOut?: () => void;
 }
@@ -81,6 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseMobile,
   currentProfile,
   onOpenAuth,
+  onOpenChangePassword,
   onOpenConnectionModal,
   onSignOut,
 }) => {
@@ -480,6 +482,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   >
                     <User className="w-3.5 h-3.5" />
                     <span>Thông tin tài khoản</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setIsProfileMenuOpen(false);
+                      if (onOpenChangePassword) onOpenChangePassword();
+                    }}
+                    className="w-full flex items-center space-x-2 px-3 py-2 rounded-xl text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                  >
+                    <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Đổi mật khẩu</span>
                   </button>
 
                   <div className="my-1 border-t border-slate-100" />

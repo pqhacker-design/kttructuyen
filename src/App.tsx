@@ -22,6 +22,7 @@ import { AIExamGeneratorView } from './components/AIExamGeneratorView';
 import { AdminUsersView } from './components/AdminUsersView';
 import { UserIsolationTestView } from './components/UserIsolationTestView';
 import { SQLSchemaView } from './components/SQLSchemaView';
+import { ChangePasswordModal } from './components/ChangePasswordModal';
 
 import { Profile, Exam } from './types';
 import { getCurrentProfile, onAuthStateChange, isSupabaseConfigured, signOut } from './lib/supabase';
@@ -35,6 +36,7 @@ export default function App() {
   // Modals state
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isConnectionOpen, setIsConnectionOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState('');
 
@@ -126,6 +128,18 @@ export default function App() {
   };
 
   // ----------------------------------------------------------------------------
+  // AUTH LOADING STATE: Prevent flashing dashboard before auth check completes
+  // ----------------------------------------------------------------------------
+  if (loadingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4 text-white">
+        <div className="w-10 h-10 border-3 border-indigo-400 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-sm font-medium text-slate-300">Đang tải dữ liệu phiên làm việc...</p>
+      </div>
+    );
+  }
+
+  // ----------------------------------------------------------------------------
   // IF STUDENT IS ACTIVELY TAKING AN EXAM: RENDER DISTRACTION-FREE EXAM VIEW
   // ----------------------------------------------------------------------------
   if (activeExamData) {
@@ -154,7 +168,67 @@ export default function App() {
   }
 
   // ----------------------------------------------------------------------------
-  // MAIN WORKSPACE INTERFACE
+  // UNAUTHENTICATED PORTAL: RENDER ONLY LOGIN OR STUDENT JOIN (NO APP UI BEHIND)
+  // ----------------------------------------------------------------------------
+  if (!currentProfile) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col items-center justify-center p-4 relative overflow-hidden selection:bg-indigo-500 selection:text-white">
+        {/* Subtle decorative mesh background */}
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_120%,rgba(120,119,198,0.2),rgba(255,255,255,0))] pointer-events-none" />
+
+        {/* Supabase Connection Setup Modal if database not configured */}
+        <ConnectionModal
+          isOpen={isConnectionOpen}
+          onClose={() => setIsConnectionOpen(false)}
+          onConfigSaved={() => {
+            checkAuth();
+          }}
+        />
+
+        {/* Only the active entry interface is rendered - completely isolating backend UI */}
+        {isJoinModalOpen ? (
+          <JoinExamView
+            isOpen={true}
+            onClose={() => {
+              setIsJoinModalOpen(false);
+              setIsAuthOpen(true);
+            }}
+            initialCode={joinCodeInput}
+            currentProfile={null}
+            onExamReady={(data) => {
+              setActiveExamData(data);
+              setIsJoinModalOpen(false);
+            }}
+            onSwitchToLogin={() => {
+              setIsJoinModalOpen(false);
+              setIsAuthOpen(true);
+            }}
+          />
+        ) : (
+          <AuthModal
+            isOpen={true}
+            onClose={() => {}}
+            isRequired={true}
+            onAuthSuccess={(profile) => {
+              if (profile) setCurrentProfile(profile);
+              setIsAuthOpen(false);
+              checkAuth();
+            }}
+            onOpenConnectionModal={() => {
+              setIsConnectionOpen(true);
+            }}
+            onStudentDirectExam={() => {
+              setJoinCodeInput('');
+              setIsJoinModalOpen(true);
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // ----------------------------------------------------------------------------
+  // MAIN WORKSPACE INTERFACE (ONLY FOR AUTHENTICATED USERS)
   // ----------------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex font-sans antialiased selection:bg-indigo-500 selection:text-white">
@@ -173,6 +247,7 @@ export default function App() {
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
         currentProfile={currentProfile}
         onOpenAuth={() => setIsAuthOpen(true)}
+        onOpenChangePassword={() => setIsChangePasswordOpen(true)}
         onOpenConnectionModal={() => setIsConnectionOpen(true)}
         onSignOut={async () => {
           await signOut();
@@ -192,6 +267,7 @@ export default function App() {
         <Navbar
           currentProfile={currentProfile}
           onOpenAuth={() => setIsAuthOpen(true)}
+          onOpenChangePassword={() => setIsChangePasswordOpen(true)}
           onSignOut={async () => {
             await signOut();
             setCurrentProfile(null);
@@ -337,6 +413,12 @@ export default function App() {
         onExamReady={(data) => {
           setActiveExamData(data);
         }}
+      />
+
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+        currentProfile={currentProfile}
       />
     </div>
   );

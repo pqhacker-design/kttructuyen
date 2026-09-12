@@ -20,6 +20,7 @@ import {
   createQuestionBank 
 } from './questionService';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
+import { getUserApiKey } from './apiKeyService';
 
 export interface GenerateExamParams {
   subjectId: SubjectCode;
@@ -38,60 +39,71 @@ class AIExamService {
    * Main entry point to generate a complete pedagogical exam
    */
   public async generateExam(params: GenerateExamParams): Promise<AIExamGenerationResponse> {
+    const userApiKey = getUserApiKey();
+    if (!userApiKey) {
+      throw new Error('BẮT BUỘC CẤU HÌNH API KEY: Hệ thống yêu cầu mỗi giáo viên tự nhập Google Gemini API Key riêng để ra đề (không dùng chung API hệ thống). Vui lòng cấu hình API Key của bạn.');
+    }
+
     const profile = SubjectRuleEngine.getProfile(params.subjectId);
     const activeReg = regulationService.getPrimaryReference(
       params.subjectId, 
       params.grade <= 9 ? 'THCS' : 'THPT'
     );
 
-    // Try calling server-side API first
-    try {
-      const response = await fetch('/api/ai/generate-exam', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          subject: profile.name,
-          subjectCode: params.subjectId,
-          grade: params.grade,
-          term: params.term,
-          duration: params.durationMinutes,
-          topics: params.topics,
-          structure: params.structure,
-          regulation: activeReg.document_number,
-          customPrompt: params.customPromptRequirements,
-        }),
-      });
+    // Call server-side API using the user's custom API key
+    const response = await fetch('/api/ai/generate-exam', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-gemini-api-key': userApiKey,
+      },
+      body: JSON.stringify({
+        subject: profile.name,
+        subjectCode: params.subjectId,
+        grade: params.grade,
+        term: params.term,
+        duration: params.durationMinutes,
+        topics: params.topics,
+        structure: params.structure,
+        regulation: activeReg.document_number,
+        customPrompt: params.customPromptRequirements,
+        apiKey: userApiKey,
+      }),
+    });
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.questions && data.questions.length > 0) {
-          const validation = ExamValidator.validateExam(params.structure, data.questions, params.matrixCells);
-          return {
-            exam: {
-              title: data.exam?.title || `ĐỀ KIỂM TRA ${params.term.toUpperCase()} MÔN ${profile.name.toUpperCase()} - LỚP ${params.grade}`,
-              subject: profile.name,
-              grade: params.grade,
-              term: params.term,
-              duration_minutes: params.durationMinutes,
-              total_score: 10.0,
-              instructions: data.exam?.instructions || 'Thí sinh làm bài theo đúng thời gian quy định. Không sử dụng tài liệu trừ khi có hướng dẫn riêng.',
-            },
-            structure: params.structure,
-            matrix: params.matrixCells || this.buildDefaultMatrix(params),
-            questions: data.questions,
-            validation,
-            model: data.model || 'gemini-flash-latest',
-            prompt_version: 'CV7991_GDPT2018_v2',
-            regulation_reference: activeReg.document_number,
-          };
-        }
-      }
-    } catch (e) {
-      console.warn('Backend AI endpoint not reachable, generating via high-fidelity pedagogical engine:', e);
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `Lỗi máy chủ khi sinh đề: ${response.statusText}`);
     }
 
-    // Fallback: Client-side High-Fidelity Pedagogical Generator
-    return this.generateDeterministicPedagogicalExam(params);
+    const data = await response.json();
+    if (data.fallback && !data.success) {
+      throw new Error(data.error || 'Mô hình AI báo lỗi hoặc chưa phản hồi.');
+    }
+
+    if (data && data.questions && data.questions.length > 0) {
+      const validation = ExamValidator.validateExam(params.structure, data.questions, params.matrixCells);
+      return {
+        exam: {
+          title: data.exam?.title || `ĐỀ KIỂM TRA ${params.term.toUpperCase()} MÔN ${profile.name.toUpperCase()} - LỚP ${params.grade}`,
+          subject: profile.name,
+          grade: params.grade,
+          term: params.term,
+          duration_minutes: params.durationMinutes,
+          total_score: 10.0,
+          instructions: data.exam?.instructions || 'Thí sinh làm bài theo đúng thời gian quy định. Không sử dụng tài liệu trừ khi có hướng dẫn riêng.',
+        },
+        structure: params.structure,
+        matrix: params.matrixCells || this.buildDefaultMatrix(params),
+        questions: data.questions,
+        validation,
+        model: data.model || 'gemini-2.5-flash',
+        prompt_version: 'CV7991_GDPT2018_v2',
+        regulation_reference: activeReg.document_number,
+      };
+    }
+
+    throw new Error('Dữ liệu trả về từ Gemini AI không có câu hỏi hợp lệ.');
   }
 
   /**
@@ -103,39 +115,46 @@ class AIExamService {
     grade: number,
     topic: string
   ): Promise<GeneratedAIQuestion> {
-    try {
-      const response = await fetch('/api/ai/regenerate-question', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          question,
-          subjectId,
-          grade,
-          topic,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.question) {
-          return {
-            ...data.question,
-            id: question.id,
-            question_order: question.question_order,
-            points: question.points,
-            exam_part: question.exam_part,
-            matrix_cell_id: question.matrix_cell_id,
-            teacher_accepted: true,
-            created_by_ai: true,
-          };
-        }
-      }
-    } catch (e) {
-      console.warn('API regenerate error, falling back to pedagogical variation:', e);
+    const userApiKey = getUserApiKey();
+    if (!userApiKey) {
+      throw new Error('Vui lòng cấu hình Gemini API Key của bạn để tạo lại câu hỏi bằng AI.');
     }
 
-    // Local variation
-    return this.createVariationOfQuestion(question, subjectId, grade, topic);
+    const response = await fetch('/api/ai/regenerate-question', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-gemini-api-key': userApiKey,
+      },
+      body: JSON.stringify({
+        question,
+        subjectId,
+        grade,
+        topic,
+        apiKey: userApiKey,
+      }),
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || 'Không thể tạo lại câu hỏi qua AI.');
+    }
+
+    const data = await response.json();
+    if (data && data.question) {
+      return {
+        ...data.question,
+        id: question.id,
+        question_order: question.question_order,
+        points: question.points,
+        exam_part: question.exam_part,
+        matrix_cell_id: question.matrix_cell_id,
+        teacher_accepted: true,
+        created_by_ai: true,
+      };
+    }
+
+    throw new Error(data.error || 'AI không phản hồi câu hỏi mới.');
   }
 
   /**
@@ -967,15 +986,21 @@ class AIExamService {
     grade: number;
     topic: string;
   }): Promise<EssaySubItem> {
+    const userApiKey = getUserApiKey();
     try {
-      const response = await fetch('/api/ai/regenerate-essay-subitem', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(params),
-      });
-      const data = await response.json();
-      if (data.success && data.sub_item) {
-        return data.sub_item;
+      if (userApiKey) {
+        const response = await fetch('/api/ai/regenerate-essay-subitem', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-gemini-api-key': userApiKey,
+          },
+          body: JSON.stringify({ ...params, apiKey: userApiKey }),
+        });
+        const data = await response.json();
+        if (data.success && data.sub_item) {
+          return data.sub_item;
+        }
       }
     } catch (e) {
       console.warn('API regenerate-essay-subitem error, using local generator:', e);

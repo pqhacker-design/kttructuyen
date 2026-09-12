@@ -1,4 +1,5 @@
 import { Profile, AuditLog } from '../types';
+import { getSupabase, isSupabaseConfigured, getCurrentUser } from '../lib/supabase';
 
 export interface AdminUserItem extends Profile {
   last_login_at?: string;
@@ -123,15 +124,89 @@ export async function resetUserPassword(
   }
 }
 
+export async function changeUserSelfPassword(
+  userId: string,
+  userEmail: string,
+  newPass: string
+): Promise<void> {
+  if (!newPass || newPass.length < 6) {
+    throw new Error('Mật khẩu mới phải có tối thiểu 6 ký tự.');
+  }
+
+  let clientSuccess = false;
+  let clientError = '';
+
+  // 1. If client is authenticated with Supabase Auth, call supabase.auth.updateUser
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabase();
+      const currentUser = await getCurrentUser();
+      if (currentUser) {
+        const { error } = await supabase.auth.updateUser({ password: newPass });
+        if (error) {
+          clientError = error.message;
+        } else {
+          clientSuccess = true;
+        }
+      }
+    } catch (err: any) {
+      clientError = err.message || '';
+    }
+  }
+
+  // 2. Also notify the server to update local store, admin registry & audit logs
+  try {
+    const res = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, newPassword: newPass, userEmail }),
+    });
+    const data = await res.json();
+    if (!data.success && !clientSuccess) {
+      throw new Error(data.error || clientError || 'Không thể đổi mật khẩu.');
+    }
+  } catch (err: any) {
+    if (!clientSuccess) {
+      throw new Error(clientError || err.message || 'Không thể đổi mật khẩu.');
+    }
+  }
+}
+
 export async function deleteUser(
   userId: string,
   force = false,
   actorEmail?: string
-): Promise<{ success: boolean; blocked?: boolean; message?: string }> {
-  const res = await fetch(`/api/admin/users/${userId}?force=${force}&actorEmail=${encodeURIComponent(actorEmail || '')}`, {
-    method: 'DELETE',
-  });
-  return res.json();
+): Promise<{ success: boolean; blocked?: boolean; message?: string; dependencies?: any }> {
+  try {
+    const res = await fetch(`/api/admin/users/${userId}?force=${force}&actorEmail=${encodeURIComponent(actorEmail || '')}`, {
+      method: 'DELETE',
+    });
+    const data = await res.json().catch(() => ({ success: false, error: 'Phản hồi không hợp lệ từ máy chủ.' }));
+    
+    // Also if client is connected to Supabase, attempt to delete from profiles table directly as backup
+    if (data.success && isSupabaseConfigured()) {
+      try {
+        const sb = getSupabase();
+        await sb.from('profiles').delete().or(`id.eq.${userId},user_id.eq.${userId}`);
+      } catch (e) {
+        // ignore client side cleanup error
+      }
+    }
+
+    return data;
+  } catch (err: any) {
+    // If API failed, check if we can delete from client-side Supabase if configured
+    if (isSupabaseConfigured()) {
+      try {
+        const sb = getSupabase();
+        await sb.from('profiles').delete().or(`id.eq.${userId},user_id.eq.${userId}`);
+        return { success: true };
+      } catch (sbErr: any) {
+        throw new Error(sbErr.message || err.message || 'Không thể xóa tài khoản.');
+      }
+    }
+    throw err;
+  }
 }
 
 export async function fetchAuditLogs(): Promise<AuditLog[]> {

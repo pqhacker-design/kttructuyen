@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LogIn, UserPlus, Mail, Lock, User, Shield, AlertCircle, CheckCircle2, GraduationCap, ArrowRight } from 'lucide-react';
+import { LogIn, Mail, Lock, Shield, AlertCircle, CheckCircle2, GraduationCap, ArrowRight } from 'lucide-react';
 import { getSupabase, getCurrentProfile, isSupabaseConfigured, setActiveUserProfile, INITIAL_ADMIN_EMAIL, INITIAL_ADMIN_PASSWORD } from '../lib/supabase';
 import { Profile, UserRole } from '../types';
 
@@ -18,13 +18,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   isRequired = false,
   onStudentDirectExam,
 }) => {
-  if (!isOpen) return null;
-
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
+  const [mode, setMode] = useState<'login' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState<UserRole>('teacher');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
@@ -39,6 +35,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       setPassword(INITIAL_ADMIN_PASSWORD);
     }
   }, []);
+
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,58 +158,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           onAuthSuccess(profile);
           onClose();
         }
-      } else if (mode === 'register') {
-        // Register new account with Supabase
-        const targetRole = cleanEmail === INITIAL_ADMIN_EMAIL.toLowerCase() ? 'admin' : role;
-        
-        const { data, error } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password,
-          options: {
-            data: {
-              full_name: fullName.trim() || cleanEmail.split('@')[0],
-              role: targetRole,
-            },
-          },
-        });
-
-        if (error) {
-          if (error.message.includes('User already registered')) {
-            throw new Error('Email này đã được đăng ký tài khoản trên Supabase. Vui lòng chuyển sang tab Đăng nhập.');
-          }
-          if (error.message.includes('Password should be at least')) {
-            throw new Error('Mật khẩu phải có độ dài ít nhất 6 ký tự.');
-          }
-          throw new Error(error.message);
-        }
-
-        if (data.user) {
-          const newProfile: Profile = {
-            id: data.user.id,
-            user_id: data.user.id,
-            full_name: fullName.trim() || cleanEmail.split('@')[0],
-            email: data.user.email || cleanEmail,
-            role: targetRole,
-            status: 'active',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          };
-
-          try {
-            await supabase.from('profiles').upsert([newProfile]);
-          } catch (pe) {
-            console.warn('[Register] Profile upsert notice:', pe);
-          }
-
-          if (data.session) {
-            setActiveUserProfile(newProfile);
-            onAuthSuccess(newProfile);
-            onClose();
-          } else {
-            setInfoMsg('Đăng ký tài khoản thành công! Nếu dự án Supabase bật xác nhận email, vui lòng kiểm tra hộp thư đến. Sau đó đăng nhập lại.');
-            setMode('login');
-          }
-        }
       } else if (mode === 'forgot') {
         const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail);
         if (error) throw new Error(error.message);
@@ -236,10 +182,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
             <div>
               <h3 className="font-bold text-base text-white tracking-tight">
-                {mode === 'login' ? 'Đăng nhập EduExam' : mode === 'register' ? 'Đăng ký tài khoản' : 'Khôi phục mật khẩu'}
+                {mode === 'login' ? 'Đăng nhập EduExam' : 'Khôi phục Mật khẩu'}
               </h3>
               <p className="text-xs text-slate-300 mt-0.5">
-                Nền tảng Quản lý & Thi Trực tuyến
+                Nền tảng Quản lý & Thi Trực tuyến GDPT 2018
               </p>
             </div>
           </div>
@@ -253,31 +199,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           )}
         </div>
 
-        {/* Tab switch */}
-        {mode !== 'forgot' && (
-          <div className="flex border-b border-slate-200 bg-slate-50">
-            <button
-              onClick={() => { setMode('login'); setErrorMsg(null); }}
-              className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider text-center border-b-2 transition-colors ${
-                mode === 'login'
-                  ? 'border-indigo-600 text-indigo-600 bg-white'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              Đăng nhập
-            </button>
-            <button
-              onClick={() => { setMode('register'); setErrorMsg(null); }}
-              className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider text-center border-b-2 transition-colors ${
-                mode === 'register'
-                  ? 'border-indigo-600 text-indigo-600 bg-white'
-                  : 'border-transparent text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              Đăng ký tài khoản
-            </button>
+        {/* Notice for centralized account administration */}
+        <div className="bg-slate-50 border-b border-slate-200 px-6 py-2.5 flex items-center justify-between text-xs text-slate-600">
+          <div className="flex items-center space-x-1.5">
+            <Shield className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+            <span className="font-medium">Tài khoản quản trị tập trung bởi Admin</span>
           </div>
-        )}
+          {mode === 'forgot' && (
+            <button
+              type="button"
+              onClick={() => { setMode('login'); setErrorMsg(null); setInfoMsg(null); }}
+              className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold hover:underline"
+            >
+              ← Quay lại Đăng nhập
+            </button>
+          )}
+        </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {errorMsg && (
@@ -292,57 +229,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
               <span>{infoMsg}</span>
             </div>
-          )}
-
-          {mode === 'register' && (
-            <>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Họ và tên
-                </label>
-                <div className="relative">
-                  <User className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type="text"
-                    required
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    placeholder="Ví dụ: Thầy Trần Quang Hưng"
-                    className="w-full pl-9 pr-3.5 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Vai trò của bạn
-                </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setRole('teacher')}
-                    className={`py-2 px-3 text-xs font-semibold rounded-lg border text-center transition-all ${
-                      role === 'teacher'
-                        ? 'bg-indigo-50 border-indigo-600 text-indigo-700 shadow-2xs'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    Giáo viên / Quản lý
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setRole('student')}
-                    className={`py-2 px-3 text-xs font-semibold rounded-lg border text-center transition-all ${
-                      role === 'student'
-                        ? 'bg-indigo-50 border-indigo-600 text-indigo-700 shadow-2xs'
-                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    Học sinh
-                  </button>
-                </div>
-              </div>
-            </>
           )}
 
           <div>
@@ -404,15 +290,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <LogIn className="w-4 h-4" />
                 <span>Đăng nhập</span>
               </>
-            ) : mode === 'register' ? (
-              <>
-                <UserPlus className="w-4 h-4" />
-                <span>Tạo tài khoản</span>
-              </>
             ) : (
               <span>Gửi link đặt lại mật khẩu</span>
             )}
           </button>
+
+          <p className="text-[11px] text-slate-500 text-center leading-relaxed">
+            Người dùng chỉ được tạo bởi tài khoản quản trị viên (Admin). Nếu chưa có tài khoản, vui lòng liên hệ Admin nhà trường.
+          </p>
 
           {/* Student direct entry shortcut */}
           {onStudentDirectExam && (

@@ -26,7 +26,8 @@ import {
   ExternalLink,
   Info,
   Sliders,
-  Percent
+  Percent,
+  Cpu
 } from 'lucide-react';
 import { 
   SubjectCode, 
@@ -49,6 +50,8 @@ import { exportExamToWord, exportAnswersToWord, exportMatrixToWord } from '../se
 import { exportExamToPdf, exportAnswersToPdf, exportMatrixToPdf } from '../services/pdfExportService';
 import { buildCV7991Data } from '../lib/cv7991MatrixHelper';
 import { CV7991MatrixTableView } from './CV7991MatrixTableView';
+import { ApiKeyModal } from './ApiKeyModal';
+import { hasUserApiKey, getMaskedApiKey } from '../services/apiKeyService';
 
 interface AIExamGeneratorViewProps {
   currentProfile: Profile | null;
@@ -104,6 +107,14 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
   const [publishedResult, setPublishedResult] = useState<{ examId: string; accessCode?: string } | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [hasKey, setHasKey] = useState(() => hasUserApiKey());
+
+  useEffect(() => {
+    const handleKeyChange = () => setHasKey(hasUserApiKey());
+    window.addEventListener('edu_api_key_changed', handleKeyChange);
+    return () => window.removeEventListener('edu_api_key_changed', handleKeyChange);
+  }, []);
 
   // When subject or grade changes, update profile and default topics
   useEffect(() => {
@@ -374,6 +385,11 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
 
   // Handle generation action
   const handleStartGeneration = async () => {
+    if (!hasUserApiKey()) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
+
     if (!isLiveScoreExact10) {
       alert('Tổng điểm cấu hình các phần bắt buộc phải bằng chính xác 10,0 điểm theo Công văn 7991. Vui lòng bấm "Tự động cân bằng 10,0 điểm".');
       return;
@@ -429,6 +445,9 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
       }
     } catch (err: any) {
       console.error('Error in AI Exam generation:', err);
+      if (err.message && (err.message.includes('API Key') || err.message.includes('API_KEY'))) {
+        setIsApiKeyModalOpen(true);
+      }
       alert('Đã xảy ra lỗi trong quá trình tạo đề: ' + (err.message || 'Lỗi không xác định'));
       setCurrentStep('structure');
     } finally {
@@ -438,6 +457,10 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
 
   // Handle regenerate single question
   const handleRegenerateQuestion = async (q: GeneratedAIQuestion) => {
+    if (!hasUserApiKey()) {
+      setIsApiKeyModalOpen(true);
+      return;
+    }
     if (!generatedExamData || !generatedExamData.questions) return;
     setRegeneratingQuestionId(q.id);
 
@@ -615,6 +638,54 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
             }`}>4</span>
             <span className="hidden sm:inline">4. Xem trước & Duyệt</span>
           </div>
+        </div>
+      </div>
+
+      {/* API Key Configuration Status Banner (Enforced per-user API key requirement) */}
+      <div className={`rounded-2xl p-4 border transition-all ${
+        hasKey
+          ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+          : 'bg-gradient-to-r from-amber-50 to-rose-50 border-amber-300 text-amber-950 shadow-xs'
+      }`}>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start space-x-3">
+            <div className={`p-2 rounded-xl shrink-0 ${hasKey ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+              <Cpu className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h3 className="font-bold text-sm">
+                  {hasKey ? 'Cấu hình Gemini API Key: Đã sẵn sàng' : 'Yêu cầu cấu hình Gemini API Key cá nhân'}
+                </h3>
+                {hasKey ? (
+                  <span className="px-2 py-0.5 bg-emerald-200 text-emerald-800 text-[10px] font-extrabold rounded-full uppercase tracking-wider">
+                    {getMaskedApiKey()}
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 bg-rose-200 text-rose-800 text-[10px] font-extrabold rounded-full uppercase tracking-wider">
+                    Bắt buộc
+                  </span>
+                )}
+              </div>
+              <p className="text-xs mt-0.5 opacity-90 leading-relaxed">
+                {hasKey
+                  ? 'Đang sử dụng API Key cá nhân của bạn để sinh đề thi và tạo câu hỏi tự động độc lập.'
+                  : 'Hệ thống bắt buộc mỗi giáo viên tự nhập Google Gemini API Key riêng (không dùng chung API hệ thống). Vui lòng cấu hình trước khi tạo đề.'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsApiKeyModalOpen(true)}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 flex items-center justify-center space-x-1.5 shadow-2xs ${
+              hasKey
+                ? 'bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-500/25'
+            }`}
+          >
+            <span>{hasKey ? 'Thay đổi API Key' : 'Cấu hình API Key ngay'}</span>
+          </button>
         </div>
       </div>
 
@@ -2459,6 +2530,13 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
         isOpen={isRegulationModalOpen}
         onClose={() => setIsRegulationModalOpen(false)}
         onSelectRegulation={(reg) => setActiveRegulation(reg)}
+      />
+
+      {/* User-Enforced Gemini API Key Modal */}
+      <ApiKeyModal
+        isOpen={isApiKeyModalOpen}
+        onClose={() => setIsApiKeyModalOpen(false)}
+        onSaved={() => setHasKey(hasUserApiKey())}
       />
     </div>
   );

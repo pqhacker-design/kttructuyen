@@ -587,21 +587,21 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
         )}
       </div>
 
-      {/* Redesigned Modal: Create or Edit Session (NO OVERFLOW, NEVER CUTS OFF BUTTONS) */}
+      {/* Redesigned Modal: Create or Edit Session (GUARANTEED NO OVERFLOW, STICKY ACTION BUTTONS) */}
       {isCreateOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/75 backdrop-blur-xs overflow-hidden">
+          <div className="bg-white rounded-2xl sm:rounded-3xl max-w-2xl w-full h-[88vh] max-h-[780px] flex flex-col shadow-2xl border border-slate-200 overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-150">
             {/* Sticky Header */}
-            <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between shrink-0 border-b border-slate-800">
-              <h3 className="font-bold text-base flex items-center space-x-2.5">
+            <div className="px-5 sm:px-6 py-3.5 sm:py-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between shrink-0 border-b border-slate-800">
+              <h3 className="font-bold text-sm sm:text-base flex items-center space-x-2.5">
                 <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl">
-                  <Calendar className="w-5 h-5" />
+                  <Calendar className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
                 <div>
-                  <span className="text-white block font-bold">
+                  <span className="text-white block font-bold leading-tight">
                     {editingSession ? 'Cài đặt Phòng thi & Thời gian' : 'Tạo Kỳ thi & Cấp Mã Phòng thi'}
                   </span>
-                  <span className="text-xs text-indigo-200 font-normal">
+                  <span className="text-[11px] text-indigo-200 font-normal hidden sm:block">
                     Thiết lập mã tham gia, phân công lớp và thời hạn làm bài
                   </span>
                 </div>
@@ -618,64 +618,65 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
               </button>
             </div>
 
-            {/* Scrollable Form Body */}
-            <form onSubmit={handleSaveSession} className="flex flex-col flex-1 min-h-0">
-              <div className="p-6 space-y-5 overflow-y-auto flex-1 overscroll-contain">
-                {/* 1. Chọn Đề thi */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    1. Chọn Đề thi {editingSession && <span className="text-slate-400 font-normal">(Đề đã liên kết)</span>}
-                  </label>
-                  <select
-                    value={examId}
-                    disabled={!!editingSession}
-                    onChange={(e) => {
-                      setExamId(e.target.value);
-                      const sel = exams.find((x) => x.id === e.target.value);
-                      if (sel) {
-                        setTitle(`Kỳ thi: ${sel.title}`);
-                        setDuration(sel.duration_minutes || 45);
-                      }
-                    }}
-                    className={`w-full px-3 py-2.5 text-xs rounded-xl border border-slate-300 bg-white ${
-                      editingSession ? 'opacity-70 bg-slate-100 cursor-not-allowed' : ''
-                    }`}
-                  >
-                    {exams.map((ex) => (
-                      <option key={ex.id} value={ex.id}>{ex.title} ({ex.duration_minutes} phút - {ex.total_points} điểm)</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* 2. Tiêu đề Kỳ thi */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    2. Tiêu đề Kỳ thi
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="VD: Kiểm tra Giữa kỳ I Toán 10 - Lớp 10A1"
-                    className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-white"
-                  />
-                </div>
-
-                {/* 3. Mã tham gia & Thời lượng */}
+            {/* Scrollable Form Body with explicit min-h-0 and sticky footer */}
+            <form onSubmit={handleSaveSession} className="flex flex-col flex-1 min-h-0 h-full overflow-hidden">
+              <div className="p-4 sm:p-6 space-y-4 sm:space-y-4.5 overflow-y-auto flex-1 min-h-0 overscroll-contain">
+                {/* 1 & 2. Đề thi & Tiêu đề kỳ thi */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      1. Chọn Đề thi {editingSession && <span className="text-slate-400 font-normal">(Đã liên kết)</span>}
+                    </label>
+                    <select
+                      value={examId}
+                      disabled={!!editingSession}
+                      onChange={(e) => {
+                        setExamId(e.target.value);
+                        const sel = exams.find((x) => x.id === e.target.value);
+                        if (sel) {
+                          setTitle(`Kỳ thi: ${sel.title}`);
+                          setDuration(sel.duration_minutes || 45);
+                        }
+                      }}
+                      className={`w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white ${
+                        editingSession ? 'opacity-70 bg-slate-100 cursor-not-allowed' : ''
+                      }`}
+                    >
+                      {exams.map((ex) => (
+                        <option key={ex.id} value={ex.id}>{ex.title} ({ex.duration_minutes} phút - {ex.total_points} điểm)</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      2. Tiêu đề Phòng thi
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder="VD: Kiểm tra Giữa kỳ I - Lớp 10A1"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-white"
+                    />
+                  </div>
+                </div>
+
+                {/* 3. Mã tham gia, Thời lượng & Số lần thi (3 cols) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-bold text-slate-700">
-                        3. Mã tham gia (Access Code)
+                        3. Mã phòng thi
                       </label>
                       {!editingSession && (
                         <button
                           type="button"
                           onClick={() => setAccessCode(generateAccessCode('EXAM'))}
-                          className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium"
+                          className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold"
                         >
-                          Đổi mã khác
+                          Đổi mã
                         </button>
                       )}
                     </div>
@@ -685,7 +686,7 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
                       disabled={!!editingSession}
                       value={accessCode}
                       onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
-                      className={`w-full px-3.5 py-2.5 text-xs font-mono font-bold tracking-widest rounded-xl border border-slate-300 uppercase ${
+                      className={`w-full px-3 py-2 text-xs font-mono font-bold tracking-wider rounded-xl border border-slate-300 uppercase ${
                         editingSession ? 'bg-slate-100 opacity-75' : 'bg-white'
                       }`}
                     />
@@ -693,7 +694,7 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
 
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Thời lượng làm bài (phút)
+                      Thời lượng (phút)
                     </label>
                     <input
                       type="number"
@@ -702,13 +703,30 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
                       required
                       value={duration}
                       onChange={(e) => setDuration(parseInt(e.target.value) || 45)}
-                      className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 font-bold text-slate-900 bg-white"
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 font-bold text-slate-900 bg-white"
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Số lần làm bài
+                    </label>
+                    <select
+                      value={maxAttempts}
+                      onChange={(e) => setMaxAttempts(parseInt(e.target.value) || 1)}
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white font-medium"
+                    >
+                      <option value={1}>1 lần duy nhất</option>
+                      <option value={2}>2 lần</option>
+                      <option value={3}>3 lần</option>
+                      <option value={5}>5 lần</option>
+                      <option value={999}>Không giới hạn</option>
+                    </select>
                   </div>
                 </div>
 
-                {/* 4. CÀI ĐẶT CHỌN LỚP LÀM BÀI (NEW REQUIREMENT) */}
-                <div className="p-4 bg-indigo-50/50 border border-indigo-200 rounded-2xl space-y-3">
+                {/* 4. CÀI ĐẶT CHỌN LỚP LÀM BÀI */}
+                <div className="p-3.5 bg-indigo-50/50 border border-indigo-200 rounded-2xl space-y-2.5">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2">
                       <GraduationCap className="w-4 h-4 text-indigo-600" />
@@ -716,19 +734,19 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
                         4. Cài đặt Lớp được phép làm bài
                       </label>
                     </div>
-                    <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-100 px-2.5 py-0.5 rounded-full">
+                    <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
                       {classSelectionMode === 'all' 
                         ? 'Tất cả các lớp' 
                         : `Đã chọn: ${selectedClasses.length} lớp`}
                     </span>
                   </div>
 
-                  <p className="text-[11px] text-slate-600">
-                    Hệ thống sẽ tự động xác minh lớp của học sinh khi nhập SBD/Mã HS. Nếu học sinh vào sai lớp, hệ thống sẽ cảnh báo và chặn không cho vào thi.
+                  <p className="text-[11px] text-slate-600 leading-normal">
+                    Hệ thống sẽ tự động xác minh thông tin họ tên & lớp của học sinh theo SBD/Mã HS. Nếu vào sai lớp, hệ thống sẽ cảnh báo và chặn không cho vào thi.
                   </p>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                    <label className={`p-3 rounded-xl border flex items-start space-x-2.5 cursor-pointer transition-all ${
+                    <label className={`p-2.5 rounded-xl border flex items-start space-x-2 cursor-pointer transition-all ${
                       classSelectionMode === 'all' 
                         ? 'bg-white border-indigo-400 shadow-2xs font-semibold text-indigo-950' 
                         : 'bg-white/60 border-slate-200 text-slate-700 hover:bg-white'
@@ -741,14 +759,12 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
                         className="mt-0.5 text-indigo-600 focus:ring-indigo-500"
                       />
                       <div>
-                        <div className="font-bold">Mở tự do (Tất cả các lớp)</div>
-                        <div className="text-[11px] font-normal text-slate-500 mt-0.5">
-                          Mọi học sinh có mã phòng thi đều có thể vào làm bài.
-                        </div>
+                        <div className="font-bold">Mở tự do (Tất cả lớp)</div>
+                        <div className="text-[10px] font-normal text-slate-500">Mọi học sinh có mã đều vào được</div>
                       </div>
                     </label>
 
-                    <label className={`p-3 rounded-xl border flex items-start space-x-2.5 cursor-pointer transition-all ${
+                    <label className={`p-2.5 rounded-xl border flex items-start space-x-2 cursor-pointer transition-all ${
                       classSelectionMode === 'specific' 
                         ? 'bg-white border-indigo-400 shadow-2xs font-semibold text-indigo-950' 
                         : 'bg-white/60 border-slate-200 text-slate-700 hover:bg-white'
@@ -762,17 +778,15 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
                       />
                       <div>
                         <div className="font-bold">Chỉ định Lớp cụ thể</div>
-                        <div className="text-[11px] font-normal text-slate-500 mt-0.5">
-                          Chỉ học sinh thuộc lớp được phân công mới được vào làm.
-                        </div>
+                        <div className="text-[10px] font-normal text-slate-500">Chỉ HS đúng lớp mới được vào thi</div>
                       </div>
                     </label>
                   </div>
 
                   {classSelectionMode === 'specific' && (
-                    <div className="p-3.5 bg-white rounded-xl border border-indigo-200 space-y-3">
-                      <div className="text-xs font-bold text-slate-700">Chọn các lớp được phép thi:</div>
-                      <div className="flex flex-wrap gap-2">
+                    <div className="p-3 bg-white rounded-xl border border-indigo-200 space-y-2">
+                      <div className="text-[11px] font-bold text-slate-700">Chọn lớp được phép thi:</div>
+                      <div className="flex flex-wrap gap-1.5">
                         {classes.map((cls) => {
                           const isSelected = selectedClasses.includes(cls.name);
                           return (
@@ -780,27 +794,27 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
                               key={cls.id}
                               type="button"
                               onClick={() => handleToggleClass(cls.name)}
-                              className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-all flex items-center space-x-1.5 ${
+                              className={`px-2.5 py-1 text-xs font-bold rounded-lg border transition-all flex items-center space-x-1 ${
                                 isSelected
                                   ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
                                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
                               }`}
                             >
                               <span>{cls.name}</span>
-                              {isSelected ? <Check className="w-3.5 h-3.5" /> : null}
+                              {isSelected ? <Check className="w-3 h-3" /> : null}
                             </button>
                           );
                         })}
                       </div>
 
                       {/* Custom class input */}
-                      <div className="flex items-center space-x-2 pt-1 border-t border-slate-100">
+                      <div className="flex items-center space-x-2 pt-1.5 border-t border-slate-100">
                         <input
                           type="text"
                           value={customClassInput}
                           onChange={(e) => setCustomClassInput(e.target.value)}
-                          placeholder="Thêm lớp khác (VD: 10A3, 11B2, 12Tin)..."
-                          className="px-3 py-1.5 text-xs border border-slate-300 rounded-lg bg-slate-50 flex-1"
+                          placeholder="Nhập thêm lớp (VD: 10A3, 11B1)..."
+                          className="px-2.5 py-1 text-xs border border-slate-300 rounded-lg bg-slate-50 flex-1"
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                               e.preventDefault();
@@ -811,27 +825,27 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
                         <button
                           type="button"
                           onClick={handleAddCustomClass}
-                          className="px-3 py-1.5 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 rounded-lg transition-colors shrink-0"
+                          className="px-2.5 py-1 text-xs font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 rounded-lg transition-colors shrink-0"
                         >
-                          + Thêm lớp
+                          + Thêm
                         </button>
                       </div>
 
                       {selectedClasses.length === 0 && (
-                        <p className="text-[11px] text-amber-600 font-semibold">
-                          ⚠ Vui lòng bấm chọn ít nhất 1 lớp ở trên để áp dụng phân lớp.
+                        <p className="text-[10px] text-amber-600 font-semibold">
+                          ⚠ Vui lòng bấm chọn ít nhất 1 lớp để áp dụng phân quyền.
                         </p>
                       )}
                     </div>
                   )}
                 </div>
 
-                {/* 5. Lịch mở đề & Thời hạn đóng đề */}
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                {/* 5. Lịch mở đề & Thời hạn kết thúc */}
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-800 flex items-center space-x-1.5">
-                      <Clock className="w-4 h-4 text-indigo-600" />
-                      <span>5. Lịch mở đề & Thời hạn kết thúc nộp bài</span>
+                      <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>5. Lịch mở & Hạn chót nộp bài</span>
                     </span>
                     {(startAt || endAt) && (
                       <button
@@ -847,113 +861,90 @@ export const ExamSessionView: React.FC<ExamSessionViewProps> = ({
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <div>
                       <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                        Thời gian bắt đầu mở đề:
+                        Thời gian mở phòng thi:
                       </label>
                       <input
                         type="datetime-local"
                         value={startAt}
                         onChange={(e) => setStartAt(e.target.value)}
-                        className="w-full px-2.5 py-2 text-xs rounded-xl border border-slate-300 bg-white"
+                        className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-300 bg-white"
                       />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">
-                        Trước giờ này học sinh sẽ ở phòng chờ
-                      </span>
                     </div>
 
                     <div>
                       <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                        Thời gian kết thúc (Đóng đề):
+                        Hạn chót thu bài (Đóng phòng):
                       </label>
                       <input
                         type="datetime-local"
                         value={endAt}
                         onChange={(e) => setEndAt(e.target.value)}
-                        className="w-full px-2.5 py-2 text-xs rounded-xl border border-slate-300 bg-white"
+                        className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-300 bg-white"
                       />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">
-                        Sau giờ này hệ thống sẽ tự động thu bài
-                      </span>
                     </div>
                   </div>
                 </div>
 
-                {/* 6. Số lần làm lại tối đa */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    6. Số lần học sinh được phép làm bài / làm lại
-                  </label>
-                  <select
-                    value={maxAttempts}
-                    onChange={(e) => setMaxAttempts(parseInt(e.target.value) || 1)}
-                    className="w-full px-3 py-2.5 text-xs rounded-xl border border-slate-300 bg-white"
-                  >
-                    <option value={1}>1 lần duy nhất (Kiểm tra chính thức - Không cho làm lại)</option>
-                    <option value={2}>2 lần (Cho phép làm lại 1 lần để cải thiện)</option>
-                    <option value={3}>3 lần</option>
-                    <option value={5}>5 lần</option>
-                    <option value={999}>Không giới hạn (Học sinh có thể bấm &quot;Làm lại bài thi&quot; tùy ý)</option>
-                  </select>
-                </div>
-
-                {/* 7. Chống gian lận & hiển thị */}
-                <div className="space-y-2 pt-2 border-t border-slate-100">
+                {/* 6. Chống gian lận & hiển thị */}
+                <div className="space-y-1.5 pt-1 border-t border-slate-100">
                   <label className="block text-xs font-bold text-slate-700">
-                    7. Cấu hình chống gian lận & hiển thị
+                    6. Cấu hình bảo mật phòng thi
                   </label>
 
-                  <div className="space-y-2 bg-slate-50 p-3 rounded-xl border border-slate-200/80">
-                    <label className="flex items-center space-x-2.5 text-xs text-slate-700 cursor-pointer">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 text-xs">
+                    <label className="flex items-center space-x-2 text-slate-700 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={shuffleQuestions}
                         onChange={(e) => setShuffleQuestions(e.target.checked)}
                         className="rounded text-indigo-600 focus:ring-indigo-500"
                       />
-                      <span>Xáo trộn thứ tự câu hỏi giữa các học sinh</span>
+                      <span className="text-[11px]">Xáo trộn câu hỏi</span>
                     </label>
 
-                    <label className="flex items-center space-x-2.5 text-xs text-slate-700 cursor-pointer">
+                    <label className="flex items-center space-x-2 text-slate-700 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={shuffleOptions}
                         onChange={(e) => setShuffleOptions(e.target.checked)}
                         className="rounded text-indigo-600 focus:ring-indigo-500"
                       />
-                      <span>Xáo trộn thứ tự các đáp án A, B, C, D</span>
+                      <span className="text-[11px]">Xáo trộn đáp án</span>
                     </label>
 
-                    <label className="flex items-center space-x-2.5 text-xs text-slate-700 cursor-pointer">
+                    <label className="flex items-center space-x-2 text-slate-700 cursor-pointer">
                       <input
                         type="checkbox"
                         checked={showResult}
                         onChange={(e) => setShowResult(e.target.checked)}
                         className="rounded text-indigo-600 focus:ring-indigo-500"
                       />
-                      <span>Hiển thị điểm số và đáp án ngay sau khi nộp bài</span>
+                      <span className="text-[11px]">Hiện kết quả sau nộp</span>
                     </label>
                   </div>
                 </div>
               </div>
 
               {/* STICKY FOOTER: ALWAYS VISIBLE AND NEVER CUT OFF */}
-              <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
+              <div className="px-4 sm:px-6 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0 z-10 shadow-xs">
                 <button
                   type="button"
                   onClick={() => {
                     setIsCreateOpen(false);
                     setEditingSession(null);
                   }}
-                  className="px-4 py-2.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl transition-colors"
+                  className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-xl transition-colors"
                 >
                   Hủy bỏ
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-md shadow-emerald-200 transition-all flex items-center space-x-1.5"
+                  className="px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-md shadow-emerald-200 transition-all flex items-center space-x-1.5"
                 >
+                  <Check className="w-4 h-4" />
                   <span>{editingSession ? 'Lưu cập nhật phòng thi' : 'Kích hoạt & Cấp mã phòng'}</span>
                 </button>
               </div>

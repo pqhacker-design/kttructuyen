@@ -103,6 +103,11 @@ export const ExamTakingView: React.FC<ExamTakingViewProps> = ({
   }, [examData.attempt?.id]);
 
   const saveTimeoutRef = useRef<any>(null);
+  const essayTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    setActiveEssaySubIndex(0);
+  }, [currentIndex]);
 
   // Timer countdown
   useEffect(() => {
@@ -260,12 +265,6 @@ export const ExamTakingView: React.FC<ExamTakingViewProps> = ({
       }
     }, 450);
   };
-
-  const essayTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    setActiveEssaySubIndex(0);
-  }, [currentIndex]);
 
   const handleSubAnswerChange = (questionId: string, itemNumber: string, text: string) => {
     if (examResult) return;

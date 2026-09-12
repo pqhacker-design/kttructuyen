@@ -37,8 +37,6 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
   onConfigSaved,
   onOpenMigration,
 }) => {
-  if (!isOpen) return null;
-
   const currentCreds = getActiveSupabaseCredentials();
   const [url, setUrl] = useState(currentCreds.url || '');
   const [key, setKey] = useState(currentCreds.key || '');
@@ -51,6 +49,8 @@ export const ConnectionModal: React.FC<ConnectionModalProps> = ({
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
   const [showSqlViewer, setShowSqlViewer] = useState(false);
+
+  if (!isOpen) return null;
 
   const handleTest = async () => {
     setTesting(true);

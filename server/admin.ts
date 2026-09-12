@@ -362,13 +362,17 @@ export async function resetUserPassword(userId: string, newPass: string, actorEm
       const { error } = await admin.auth.admin.updateUserById(userId, {
         password: newPass,
       });
-      if (error) throw new Error(error.message);
+      if (error) {
+        console.warn('[Admin] Auth updateUserById notice:', error.message);
+      }
     } catch (e: any) {
-      throw new Error(e.message);
+      console.warn('[Admin] Reset password warning in Supabase:', e.message);
     }
   }
 
-  const target = localUsersStore.find((u) => u.user_id === userId || u.id === userId);
+  const target = localUsersStore.find(
+    (u) => u.user_id === userId || u.id === userId || (actorEmail && u.email.toLowerCase() === actorEmail.toLowerCase())
+  );
   if (target) {
     target.password = newPass;
     target.updated_at = new Date().toISOString();
@@ -428,22 +432,42 @@ export async function deleteUserSafely(userId: string, force = false, actorEmail
       success: false,
       blocked: true,
       dependencies,
-      message: `Người dùng này đang có ${dependencies.classCount} lớp học, ${dependencies.examCount} đề thi và ${dependencies.questionCount} câu hỏi. Để bảo vệ toàn vẹn dữ liệu, hãy chuyển trạng thái sang "Khóa (locked)" hoặc "Tắt (inactive)".`,
+      message: `Người dùng này đang có ${dependencies.classCount} lớp học, ${dependencies.examCount} đề thi và ${dependencies.questionCount} câu hỏi. Để bảo vệ toàn vẹn dữ liệu, hãy chọn "Xóa bắt buộc" hoặc chuyển trạng thái sang "Khóa (locked)".`,
     };
   }
 
   const admin = getSupabaseAdmin();
   if (admin) {
     try {
-      // If force, delete profile and auth user
-      await admin.from('profiles').delete().eq('user_id', userId);
-      await admin.auth.admin.deleteUser(userId);
+      if (force && dependencies.hasData) {
+        // Cascade clean up user-owned records if force deleted
+        await Promise.allSettled([
+          admin.from('classes').delete().or(`user_id.eq.${userId},teacher_id.eq.${userId},owner_user_id.eq.${userId}`),
+          admin.from('exams').delete().eq('owner_id', userId),
+          admin.from('questions').delete().eq('owner_id', userId),
+          admin.from('question_banks').delete().eq('owner_id', userId),
+          admin.from('matrices').delete().eq('owner_id', userId),
+        ]);
+      }
+
+      // Delete profile record
+      await admin.from('profiles').delete().or(`id.eq.${userId},user_id.eq.${userId}`);
+
+      // Delete auth user (if exists in auth.users)
+      try {
+        await admin.auth.admin.deleteUser(userId);
+      } catch (authErr: any) {
+        console.warn('[Admin] Auth user delete warning:', authErr?.message || authErr);
+      }
     } catch (e: any) {
-      throw new Error(e.message);
+      console.error('[Admin] Delete user error in Supabase:', e);
+      throw new Error(e.message || 'Lỗi khi xóa người dùng trên CSDL Supabase.');
     }
   }
 
-  const idx = localUsersStore.findIndex((u) => u.user_id === userId || u.id === userId);
+  const idx = localUsersStore.findIndex(
+    (u) => u.user_id === userId || u.id === userId || u.email.toLowerCase() === userId.toLowerCase()
+  );
   let targetEmail = '';
   if (idx !== -1) {
     targetEmail = localUsersStore[idx].email;

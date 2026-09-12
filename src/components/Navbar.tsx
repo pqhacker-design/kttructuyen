@@ -19,6 +19,7 @@ interface NavbarProps {
   currentProfile: Profile | null;
   onOpenAuth: () => void;
   onSignOut?: () => void;
+  onOpenChangePassword?: () => void;
   onOpenConnectionModal: () => void;
   onOpenMigrationModal?: () => void;
   onJoinExamClick?: () => void;
@@ -30,6 +31,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentProfile,
   onOpenAuth,
   onSignOut,
+  onOpenChangePassword,
   onOpenConnectionModal,
   onOpenMigrationModal,
   onJoinExamClick,
@@ -110,6 +112,17 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div className="w-9 h-9 rounded-full bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-800 font-bold text-sm shadow-2xs">
                 {currentProfile.full_name?.charAt(0).toUpperCase() || 'U'}
               </div>
+              {/* Change Password button */}
+              <button
+                onClick={onOpenChangePassword}
+                id="nav-btn-change-password"
+                title="Đổi mật khẩu tài khoản"
+                className="flex items-center space-x-1 px-2 py-1.5 text-xs font-semibold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg border border-slate-200 transition-colors"
+              >
+                <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
+                <span className="hidden md:inline">Đổi MK</span>
+              </button>
+
               {/* Switch account / Login button */}
               <button
                 onClick={onOpenAuth}

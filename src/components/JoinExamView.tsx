@@ -28,6 +28,7 @@ interface JoinExamViewProps {
   initialCode?: string;
   currentProfile: Profile | null;
   onExamReady: (data: JoinExamResponse) => void;
+  onSwitchToLogin?: () => void;
 }
 
 export const JoinExamView: React.FC<JoinExamViewProps> = ({
@@ -36,6 +37,7 @@ export const JoinExamView: React.FC<JoinExamViewProps> = ({
   initialCode = '',
   currentProfile,
   onExamReady,
+  onSwitchToLogin,
 }) => {
   const [accessCode, setAccessCode] = useState(initialCode);
   const [studentCode, setStudentCode] = useState(
@@ -494,13 +496,26 @@ export const JoinExamView: React.FC<JoinExamViewProps> = ({
 
           {/* Sticky Footer: Always visible, never cut off */}
           <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
-            >
-              Hủy bỏ
-            </button>
+            {onSwitchToLogin && !currentProfile ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onSwitchToLogin();
+                }}
+                className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold hover:underline"
+              >
+                ← Giáo viên đăng nhập
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-xl transition-colors"
+              >
+                Hủy bỏ
+              </button>
+            )}
 
             <button
               type="submit"
