@@ -52,16 +52,37 @@ export async function testGeminiApiKey(apiKey: string): Promise<{ success: boole
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ apiKey: apiKey.trim() }),
     });
-    const data = await res.json().catch(() => ({ success: false, error: 'Phản hồi không hợp lệ từ máy chủ.' }));
-    if (!res.ok || !data.success) {
+    
+    const contentType = res.headers.get('content-type') || '';
+    if (res.ok && contentType.includes('application/json')) {
+      const data = await res.json().catch(() => ({ success: false }));
+      if (data.success) {
+        return {
+          success: true,
+          message: data.message || 'Kết nối thành công! API Key của bạn hợp lệ và sẵn sàng sử dụng.',
+        };
+      }
       return {
         success: false,
         message: data.error || 'API Key không hợp lệ hoặc không có quyền truy cập mô hình Gemini.',
       };
     }
+
+    // Fallback: When hosted on Vercel static or serverless without Node backend,
+    // test directly against Google Gemini REST API endpoint
+    const directRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey.trim())}`
+    );
+    const directData = await directRes.json().catch(() => ({}));
+    if (directRes.ok) {
+      return {
+        success: true,
+        message: 'Kết nối thành công! API Key Google Gemini hợp lệ và sẵn sàng sử dụng.',
+      };
+    }
     return {
-      success: true,
-      message: data.message || 'Kết nối thành công! API Key của bạn hợp lệ và sẵn sàng sử dụng.',
+      success: false,
+      message: directData.error?.message || 'API Key không hợp lệ hoặc không có quyền truy cập Google Gemini API.',
     };
   } catch (err: any) {
     return {
