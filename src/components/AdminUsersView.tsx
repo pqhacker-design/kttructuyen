@@ -180,7 +180,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
           message: res.message || 'Người dùng này đang có dữ liệu trong hệ thống.',
           dependencies: res.dependencies,
         });
-      } else {
+      } else if (res.success) {
         setFeedbackMsg({
           type: 'success',
           text: force
@@ -190,6 +190,11 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
         setUserToDelete(null);
         setBlockedDeleteInfo(null);
         loadData();
+      } else {
+        setFeedbackMsg({
+          type: 'error',
+          text: res.message || 'Không thể xóa tài khoản người dùng.',
+        });
       }
     } catch (err: any) {
       setFeedbackMsg({ type: 'error', text: err.message || 'Không thể xóa tài khoản.' });
