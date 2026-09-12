@@ -39,6 +39,11 @@ export interface UserIsolationReport {
 const LOCAL_USERS_KEY = 'eduexam_users_store';
 const LOCAL_AUDIT_KEY = 'eduexam_audit_logs_store';
 
+export const DEMO_EMAILS = new Set([
+  'giaovien.toan@eduexam.edu.vn',
+  'giaovien.van@eduexam.edu.vn',
+]);
+
 const DEFAULT_USERS: AdminUserItem[] = [
   {
     id: 'admin-001',
@@ -50,29 +55,15 @@ const DEFAULT_USERS: AdminUserItem[] = [
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   },
-  {
-    id: 'user-002',
-    user_id: 'user-002',
-    email: 'giaovien.toan@eduexam.edu.vn',
-    full_name: 'Thầy Nguyễn Văn An (Toán)',
-    role: 'teacher',
-    status: 'active',
-    created_at: new Date(Date.now() - 86400000 * 5).toISOString(),
-    updated_at: new Date().toISOString(),
-    last_login_at: new Date(Date.now() - 3600000 * 2).toISOString(),
-  },
-  {
-    id: 'user-003',
-    user_id: 'user-003',
-    email: 'giaovien.van@eduexam.edu.vn',
-    full_name: 'Cô Trần Thị Mai (Văn)',
-    role: 'teacher',
-    status: 'active',
-    created_at: new Date(Date.now() - 86400000 * 3).toISOString(),
-    updated_at: new Date().toISOString(),
-    last_login_at: new Date(Date.now() - 86400000).toISOString(),
-  },
 ];
+
+function isDemoAccount(u: { email?: string; id?: string; user_id?: string }): boolean {
+  const email = (u.email || '').toLowerCase().trim();
+  const id = (u.id || u.user_id || '').toLowerCase().trim();
+  if (DEMO_EMAILS.has(email)) return true;
+  if (id === 'user-002' || id === 'user-003' || id === 'user-gv-toan' || id === 'user-gv-van') return true;
+  return false;
+}
 
 function getStoredUsers(): AdminUserItem[] {
   if (typeof window === 'undefined') return DEFAULT_USERS;
@@ -84,7 +75,18 @@ function getStoredUsers(): AdminUserItem[] {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+      // Clean and remove any demo accounts permanently
+      const cleaned = parsed.filter((u: AdminUserItem) => !isDemoAccount(u));
+      const hasAdmin = cleaned.some(
+        (u) => u.role === 'admin' || (u.email || '').toLowerCase() === INITIAL_ADMIN_EMAIL.toLowerCase()
+      );
+      if (!hasAdmin) {
+        cleaned.unshift(DEFAULT_USERS[0]);
+      }
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(cleaned));
+      }
+      return cleaned;
     }
     localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(DEFAULT_USERS));
     return DEFAULT_USERS;
@@ -96,7 +98,8 @@ function getStoredUsers(): AdminUserItem[] {
 function saveStoredUsers(users: AdminUserItem[]): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(users));
+    const cleaned = users.filter((u) => !isDemoAccount(u));
+    localStorage.setItem(LOCAL_USERS_KEY, JSON.stringify(cleaned));
   } catch (e) {
     console.warn('[userService] Could not save users to localStorage:', e);
   }
@@ -131,8 +134,8 @@ function addStoredAuditLog(entry: Omit<AuditLog, 'id' | 'created_at'>): void {
 }
 
 /**
- * Safe fetch helper that guards against HTML responses (e.g. Vercel 404 pages)
- * to completely eliminate "Unexpected token 'T', 'The page c'... is not valid JSON"
+ * Safe fetch helper that NEVER throws "Unexpected token 'T', 'The page c'... is not valid JSON".
+ * It reads text first, validates status and content-type, and returns clean structured objects.
  */
 async function safeFetchJson<T = any>(
   url: string,
@@ -140,13 +143,23 @@ async function safeFetchJson<T = any>(
 ): Promise<{ ok: boolean; status: number; data?: T; isHtml?: boolean }> {
   try {
     const res = await fetch(url, options);
+    if (!res.ok) {
+      return { ok: false, status: res.status };
+    }
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
-      // Vercel static router returned HTML (e.g. 404 or index.html rewrite)
       return { ok: false, status: res.status, isHtml: true };
     }
-    const data = await res.json();
-    return { ok: res.ok, status: res.status, data };
+    const rawText = await res.text();
+    if (!rawText || rawText.trim().startsWith('<') || rawText.trim().startsWith('The page')) {
+      return { ok: false, status: res.status, isHtml: true };
+    }
+    try {
+      const data = JSON.parse(rawText);
+      return { ok: true, status: res.status, data };
+    } catch {
+      return { ok: false, status: res.status };
+    }
   } catch {
     return { ok: false, status: 0 };
   }
@@ -160,8 +173,9 @@ export async function fetchAllUsers(): Promise<AdminUserItem[]> {
   // 1. Try server endpoint first (Node/Docker environments)
   const apiRes = await safeFetchJson<{ success: boolean; users: AdminUserItem[] }>('/api/admin/users');
   if (apiRes.ok && apiRes.data?.success && Array.isArray(apiRes.data.users) && apiRes.data.users.length > 0) {
-    saveStoredUsers(apiRes.data.users);
-    return apiRes.data.users;
+    const cleaned = apiRes.data.users.filter((u: AdminUserItem) => !isDemoAccount(u));
+    saveStoredUsers(cleaned);
+    return cleaned;
   }
 
   // 2. Client-side Supabase query (Direct PostgreSQL connection on Vercel)
@@ -173,36 +187,31 @@ export async function fetchAllUsers(): Promise<AdminUserItem[]> {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (!error && Array.isArray(data) && data.length > 0) {
-        const mappedUsers: AdminUserItem[] = data.map((p: any) => {
-          const email = (p.email || '').toLowerCase();
-          const isAdmin = email === INITIAL_ADMIN_EMAIL.toLowerCase() || p.role === 'admin';
-          return {
-            id: p.id || p.user_id,
-            user_id: p.user_id || p.id,
-            email: p.email || '',
-            full_name: p.full_name || p.email?.split('@')[0] || 'Giáo viên',
-            role: isAdmin ? 'admin' : (p.role || 'teacher'),
-            status: (p.status as any) || 'active',
-            created_at: p.created_at || new Date().toISOString(),
-            updated_at: p.updated_at || new Date().toISOString(),
-            last_login_at: p.last_login_at,
-          };
-        });
+      if (!error && Array.isArray(data)) {
+        const mappedUsers: AdminUserItem[] = data
+          .map((p: any) => {
+            const email = (p.email || '').toLowerCase();
+            const isAdmin = email === INITIAL_ADMIN_EMAIL.toLowerCase() || p.role === 'admin';
+            return {
+              id: p.id || p.user_id,
+              user_id: p.user_id || p.id,
+              email: p.email || '',
+              full_name: p.full_name || p.email?.split('@')[0] || 'Giáo viên',
+              role: isAdmin ? 'admin' : (p.role || 'teacher'),
+              status: (p.status as any) || 'active',
+              created_at: p.created_at || new Date().toISOString(),
+              updated_at: p.updated_at || new Date().toISOString(),
+              last_login_at: p.last_login_at,
+            };
+          })
+          .filter((u) => !isDemoAccount(u));
 
         // Ensure admin user exists in list
-        const hasAdmin = mappedUsers.some((u) => u.role === 'admin' || u.email.toLowerCase() === INITIAL_ADMIN_EMAIL.toLowerCase());
+        const hasAdmin = mappedUsers.some(
+          (u) => u.role === 'admin' || u.email.toLowerCase() === INITIAL_ADMIN_EMAIL.toLowerCase()
+        );
         if (!hasAdmin) {
-          mappedUsers.unshift({
-            id: 'admin-001',
-            user_id: 'admin-001',
-            email: INITIAL_ADMIN_EMAIL.toLowerCase(),
-            full_name: 'Quản trị viên Hệ thống (Admin)',
-            role: 'admin',
-            status: 'active',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          });
+          mappedUsers.unshift(DEFAULT_USERS[0]);
         }
 
         saveStoredUsers(mappedUsers);
@@ -374,6 +383,15 @@ export async function deleteUser(
     throw new Error('ID người dùng không hợp lệ.');
   }
 
+  // Prevent deleting primary admin
+  if (cleanId === 'admin-001' || cleanId.toLowerCase() === INITIAL_ADMIN_EMAIL.toLowerCase()) {
+    return {
+      success: false,
+      blocked: true,
+      message: 'Không thể xóa tài khoản Quản trị viên chính của hệ thống.',
+    };
+  }
+
   // 1. Try server API first (Node/Express backend)
   const apiRes = await safeFetchJson<{
     success: boolean;
@@ -390,7 +408,9 @@ export async function deleteUser(
       return apiRes.data;
     }
     if (apiRes.data.success) {
-      const current = getStoredUsers().filter((u) => u.id !== cleanId && u.user_id !== cleanId && u.email.toLowerCase() !== cleanId.toLowerCase());
+      const current = getStoredUsers().filter(
+        (u) => u.id !== cleanId && u.user_id !== cleanId && u.email.toLowerCase() !== cleanId.toLowerCase()
+      );
       saveStoredUsers(current);
       return apiRes.data;
     }
@@ -455,10 +475,14 @@ export async function deleteUser(
     }
   }
 
-  // 3. Remove from localStorage cache
+  // 3. Remove from localStorage cache (always reliable)
   const localUsers = getStoredUsers();
-  const targetUser = localUsers.find((u) => u.id === cleanId || u.user_id === cleanId || u.email.toLowerCase() === cleanId.toLowerCase());
-  const updatedUsers = localUsers.filter((u) => u.id !== cleanId && u.user_id !== cleanId && u.email.toLowerCase() !== cleanId.toLowerCase());
+  const targetUser = localUsers.find(
+    (u) => u.id === cleanId || u.user_id === cleanId || u.email.toLowerCase() === cleanId.toLowerCase()
+  );
+  const updatedUsers = localUsers.filter(
+    (u) => u.id !== cleanId && u.user_id !== cleanId && u.email.toLowerCase() !== cleanId.toLowerCase()
+  );
   saveStoredUsers(updatedUsers);
 
   addStoredAuditLog({
@@ -471,7 +495,32 @@ export async function deleteUser(
     metadata: { forced: force },
   });
 
-  return { success: true, blocked: false };
+  return { success: true, blocked: false, message: 'Đã xóa tài khoản người dùng thành công.' };
+}
+
+export async function purgeAllDemoAccounts(): Promise<number> {
+  const current = getStoredUsers();
+  const filtered = current.filter((u) => !isDemoAccount(u));
+  const removedCount = current.length - filtered.length;
+  saveStoredUsers(filtered);
+
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabase();
+      await supabase.from('profiles').delete().in('email', Array.from(DEMO_EMAILS));
+    } catch {
+      // ignore
+    }
+  }
+
+  addStoredAuditLog({
+    actor_email: 'admin@eduexam.com',
+    action: 'ADMIN_PURGE_DEMO_ACCOUNTS',
+    entity_type: 'SYSTEM',
+    metadata: { purged_count: removedCount },
+  });
+
+  return removedCount;
 }
 
 export async function changeUserStatus(

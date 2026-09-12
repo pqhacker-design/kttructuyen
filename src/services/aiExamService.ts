@@ -71,12 +71,24 @@ class AIExamService {
       }),
     });
 
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `Lỗi máy chủ khi sinh đề: ${response.statusText}`);
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok || !contentType.includes('application/json')) {
+      let errorMsg = `Lỗi máy chủ khi sinh đề: ${response.statusText || 'Không xác định'}`;
+      if (contentType.includes('application/json')) {
+        const errData = await response.json().catch(() => ({}));
+        if (errData.error) errorMsg = errData.error;
+      } else {
+        errorMsg = 'Máy chủ backend không phản hồi JSON (có thể do môi trường triển khai tĩnh Vercel).';
+      }
+      throw new Error(errorMsg);
     }
 
-    const data = await response.json();
+    let data: any;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error('Dữ liệu trả về từ AI không đúng định dạng JSON.');
+    }
     if (data.fallback && !data.success) {
       throw new Error(data.error || 'Mô hình AI báo lỗi hoặc chưa phản hồi.');
     }
@@ -135,12 +147,22 @@ class AIExamService {
       }),
     });
 
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || 'Không thể tạo lại câu hỏi qua AI.');
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok || !contentType.includes('application/json')) {
+      let errorMsg = 'Không thể tạo lại câu hỏi qua AI.';
+      if (contentType.includes('application/json')) {
+        const errData = await response.json().catch(() => ({}));
+        if (errData.error) errorMsg = errData.error;
+      }
+      throw new Error(errorMsg);
     }
 
-    const data = await response.json();
+    let data: any;
+    try {
+      data = await response.json();
+    } catch {
+      throw new Error('Dữ liệu trả về từ AI không đúng định dạng JSON.');
+    }
     if (data && data.question) {
       return {
         ...data.question,
@@ -997,9 +1019,12 @@ class AIExamService {
           },
           body: JSON.stringify({ ...params, apiKey: userApiKey }),
         });
-        const data = await response.json();
-        if (data.success && data.sub_item) {
-          return data.sub_item;
+        const contentType = response.headers.get('content-type') || '';
+        if (response.ok && contentType.includes('application/json')) {
+          const data = await response.json().catch(() => null);
+          if (data && data.success && data.sub_item) {
+            return data.sub_item;
+          }
         }
       }
     } catch (e) {

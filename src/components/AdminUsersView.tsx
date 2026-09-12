@@ -16,7 +16,8 @@ import {
   Mail,
   UserCheck,
   Ban,
-  Activity
+  Activity,
+  Sparkles
 } from 'lucide-react';
 import { Profile, AuditLog } from '../types';
 import { 
@@ -26,7 +27,9 @@ import {
   changeUserStatus, 
   resetUserPassword, 
   deleteUser, 
-  fetchAuditLogs 
+  fetchAuditLogs,
+  purgeAllDemoAccounts,
+  DEMO_EMAILS
 } from '../services/userService';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -98,6 +101,26 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
     }
   };
 
+  const handlePurgeDemoAccounts = async () => {
+    setActionLoading(true);
+    setFeedbackMsg(null);
+    try {
+      const purged = await purgeAllDemoAccounts();
+      setFeedbackMsg({
+        type: 'success',
+        text: `Đã dọn sạch toàn bộ tài khoản demo (${purged} tài khoản)!`,
+      });
+      await loadData();
+    } catch (err: any) {
+      setFeedbackMsg({
+        type: 'error',
+        text: err?.message || 'Không thể dọn tài khoản demo.',
+      });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newUserEmail.trim() || !newUserFullName.trim()) return;
@@ -120,7 +143,11 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
       setNewUserPass('123456');
       loadData();
     } catch (err: any) {
-      setFeedbackMsg({ type: 'error', text: err.message || 'Không thể tạo người dùng.' });
+      const msg = err?.message || '';
+      setFeedbackMsg({ 
+        type: 'error', 
+        text: msg.includes('Unexpected token') ? 'Lỗi phản hồi máy chủ; vui lòng thử lại.' : (msg || 'Không thể tạo người dùng.') 
+      });
     } finally {
       setActionLoading(false);
     }
@@ -142,7 +169,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
       setStatusTargetUser(null);
       loadData();
     } catch (err: any) {
-      setFeedbackMsg({ type: 'error', text: err.message || 'Không thể cập nhật trạng thái.' });
+      setFeedbackMsg({ type: 'error', text: err?.message || 'Không thể cập nhật trạng thái.' });
     } finally {
       setIsChangingStatus(false);
     }
@@ -160,7 +187,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
       setSelectedUserForPass(null);
       setNewPasswordInput('');
     } catch (err: any) {
-      setFeedbackMsg({ type: 'error', text: err.message || 'Không thể đổi mật khẩu.' });
+      setFeedbackMsg({ type: 'error', text: err?.message || 'Không thể đổi mật khẩu.' });
     } finally {
       setActionLoading(false);
     }
@@ -189,6 +216,7 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
         });
         setUserToDelete(null);
         setBlockedDeleteInfo(null);
+        setUsers((prev) => prev.filter((u) => u.id !== target.id && u.user_id !== target.user_id && u.email.toLowerCase() !== target.email.toLowerCase()));
         loadData();
       } else {
         setFeedbackMsg({
@@ -197,7 +225,11 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
         });
       }
     } catch (err: any) {
-      setFeedbackMsg({ type: 'error', text: err.message || 'Không thể xóa tài khoản.' });
+      const msg = err?.message || '';
+      setFeedbackMsg({ 
+        type: 'error', 
+        text: msg.includes('Unexpected token') ? 'Lỗi phản hồi máy chủ; vui lòng thử lại.' : (msg || 'Không thể xóa tài khoản.') 
+      });
     } finally {
       setIsDeletingUser(false);
     }
@@ -230,6 +262,16 @@ export const AdminUsersView: React.FC<AdminUsersViewProps> = ({
         </div>
 
         <div className="flex items-center space-x-3">
+          <button
+            onClick={handlePurgeDemoAccounts}
+            disabled={actionLoading || loading}
+            title="Xóa vĩnh viễn mọi tài khoản demo khỏi hệ thống"
+            className="inline-flex items-center space-x-1.5 px-3.5 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200/80 rounded-xl transition-colors"
+          >
+            <Sparkles className="w-4 h-4 text-amber-600" />
+            <span>Dọn tài khoản demo</span>
+          </button>
+
           <button
             onClick={loadData}
             disabled={loading}

@@ -60,28 +60,6 @@ const localUsersStore: LocalUser[] = [
     updated_at: new Date().toISOString(),
     password: process.env.INITIAL_ADMIN_PASSWORD || '300506',
   },
-  {
-    id: 'user-gv-toan',
-    user_id: 'user-gv-toan',
-    email: 'giaovien.toan@eduexam.edu.vn',
-    full_name: 'Thầy Nguyễn Văn An (Toán)',
-    role: 'user',
-    status: 'active',
-    created_at: new Date(Date.now() - 86400000 * 5).toISOString(),
-    updated_at: new Date().toISOString(),
-    last_login_at: new Date(Date.now() - 3600000 * 2).toISOString(),
-  },
-  {
-    id: 'user-gv-van',
-    user_id: 'user-gv-van',
-    email: 'giaovien.van@eduexam.edu.vn',
-    full_name: 'Cô Trần Thị Mai (Văn)',
-    role: 'user',
-    status: 'active',
-    created_at: new Date(Date.now() - 86400000 * 3).toISOString(),
-    updated_at: new Date().toISOString(),
-    last_login_at: new Date(Date.now() - 86400000).toISOString(),
-  },
 ];
 
 const localAuditLogsStore: LocalAuditLog[] = [

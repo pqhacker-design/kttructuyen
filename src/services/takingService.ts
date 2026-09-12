@@ -3,6 +3,15 @@ import { ExamAttempt, AttemptAnswer, ExamResult, Question } from '../types';
 import { mockStore } from './mockStore';
 import { getQuestionStatements } from './docxExportService';
 
+function safeParseJsonObject(raw?: string): any {
+  if (!raw || typeof raw !== 'string') return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 export interface TakingQuestionStatement {
   id: string;
   statement: string;
@@ -413,7 +422,7 @@ export async function joinExamWithAccessCode(
     existingAnswers[ans.question_id] = {
       selected_option_id: ans.selected_option_id,
       answer_text: ans.answer_text,
-      statement_answers: ans.statement_answers || (ans.answer_text && ans.answer_text.startsWith('{') ? JSON.parse(ans.answer_text) : undefined),
+      statement_answers: ans.statement_answers || (ans.answer_text && ans.answer_text.startsWith('{') ? safeParseJsonObject(ans.answer_text) : undefined),
     };
   });
 
@@ -525,7 +534,7 @@ export async function submitExamAttempt(
       if (qType === 'true_false' || q.exam_part === 2) {
         const rawStatements = getQuestionStatements(q);
         const userStAnswers = userAns?.statement_answers || 
-          (userAns?.answer_text && userAns.answer_text.startsWith('{') ? JSON.parse(userAns.answer_text) : {});
+          (userAns?.answer_text && userAns.answer_text.startsWith('{') ? (safeParseJsonObject(userAns.answer_text) || {}) : {});
         
         const answeredCountForQ = Object.keys(userStAnswers).length;
         const isAnswered = answeredCountForQ > 0;
@@ -804,7 +813,7 @@ export async function submitExamAttempt(
       if (qType === 'true_false' || q.exam_part === 2) {
         const rawStatements = getQuestionStatements(q);
         const userStAnswers = userAns?.statement_answers || 
-          (userAns?.answer_text && userAns.answer_text.startsWith('{') ? JSON.parse(userAns.answer_text) : {});
+          (userAns?.answer_text && userAns.answer_text.startsWith('{') ? (safeParseJsonObject(userAns.answer_text) || {}) : {});
         
         const answeredCountForQ = Object.keys(userStAnswers).length;
         const isAnswered = answeredCountForQ > 0;
