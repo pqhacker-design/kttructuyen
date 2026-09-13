@@ -11,6 +11,9 @@ import type { GenerateExamParams } from './aiExamService';
 import { SubjectRuleEngine } from '../lib/subjectRuleEngine';
 import { regulationService } from './regulationService';
 import { ExamValidator } from '../lib/examValidator';
+import { safeParseAIJson, cleanJsonResponse } from '../lib/jsonRepairHelper';
+
+export { safeParseAIJson, cleanJsonResponse };
 
 const CANDIDATE_MODELS = [
   'gemini-2.5-flash',
@@ -112,17 +115,6 @@ export async function callDirectGeminiAPI(
   throw new Error(
     `Không thể kết nối đến Gemini API (${lastErrorMsg || 'Tất cả mô hình đang bận'}). Vui lòng kiểm tra lại API Key cá nhân trong Cài đặt API.`
   );
-}
-
-/**
- * Cleans markdown code blocks (```json ... ```) from Gemini raw response
- */
-export function cleanJsonResponse(rawText: string): string {
-  let cleaned = rawText.trim();
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-  }
-  return cleaned;
 }
 
 /**
@@ -260,8 +252,12 @@ QUY ĐỊNH BẮT BUỘC THEO ĐẶC THÙ MÔN HỌC:
    - Authentic English, không dùng tiếng Anh dịch thô.
    - Kiểm tra phát âm (gạch chân phần phát âm), từ vựng theo ngữ cảnh, đọc hiểu, viết câu.
 
+QUY ĐỊNH BẮT BUỘC VỀ ĐỊNH DẠNG JSON & CÔNG THỨC:
+- Toàn bộ câu trả lời BẮT BUỘC là đối tượng JSON duy nhất, không kèm giải thích ngoài.
+- ĐẶC BIỆT LƯU Ý VỀ CÔNG THỨC TOÁN HỌC (LaTeX): Khi viết công thức toán hoặc ký hiệu trong chuỗi JSON, BẮT BUỘC dùng hai dấu gạch chéo ngược \\\\ (Ví dụ: viết \\\\frac{a}{b}, \\\\sqrt{x}, \\\\alpha, \\\\vec{u}, \\\\Delta, \\\\times, \\\\le, \\\\ge, \\\\int, \\\\sin, \\\\cos). TUYỆT ĐỐI không dùng một dấu gạch chéo ngược đơn \\ vì sẽ gây lỗi cú pháp JSON.
+
 YÊU CẦU ĐẦU RA (ĐỊNH DẠNG JSON DUY NHẤT):
-Trả VỀ ĐỐI TƯỢNG JSON VỚI CẤU TRÚC:
+TrẢ VỀ ĐỐI TƯỢNG JSON VỚI CẤU TRÚC:
 {
   "exam": {
     "title": "Tiêu đề đề thi",
@@ -321,8 +317,7 @@ ${sampleStatementsJson}
 `;
 
   const { text: responseText, model: usedModel } = await callDirectGeminiAPI(apiKey, prompt);
-  const cleanedJson = cleanJsonResponse(responseText);
-  const parsedData = JSON.parse(cleanedJson);
+  const parsedData = safeParseAIJson(responseText);
 
   if (!parsedData || !parsedData.questions || parsedData.questions.length === 0) {
     throw new Error('Mô hình Gemini không phản hồi danh sách câu hỏi hợp lệ.');
@@ -392,8 +387,7 @@ TRẢ VỀ DUY NHẤT ĐỐI TƯỢNG JSON HỢP LỆ VỚI CẤU TRÚC:
     images: params.images,
   });
 
-  const cleaned = cleanJsonResponse(responseText);
-  return JSON.parse(cleaned) as TextbookExtractionResult;
+  return safeParseAIJson<TextbookExtractionResult>(responseText);
 }
 
 /**
@@ -417,12 +411,12 @@ Nội dung câu cũ: ${params.question.content}
 YÊU CẦU:
 - Giữ nguyên loại câu, điểm số và mức độ nhận thức.
 - Tạo nội dung mới, chính xác, sư phạm, không trùng lặp.
+- ĐẶC BIỆT LƯU Ý VỀ CÔNG THỨC: Viết công thức LaTeX dùng hai dấu gạch chéo ngược (ví dụ \\\\frac, \\\\sqrt, \\\\alpha, \\\\vec).
 - Trả về JSON duy nhất: { "question": { "content": "...", "options": [...], "statements": [...], "short_answer": {...}, "essay_rubric": [...], "explanation": "..." } }
 `;
 
   const { text } = await callDirectGeminiAPI(apiKey, prompt);
-  const cleaned = cleanJsonResponse(text);
-  const parsed = JSON.parse(cleaned);
+  const parsed = safeParseAIJson(text);
   return {
     ...params.question,
     ...(parsed.question || parsed),
@@ -459,7 +453,8 @@ YÊU CẦU QUAN TRỌNG:
 1. Ý mới phải phát triển tự nhiên từ bối cảnh chung, có ý nghĩa sư phạm cao, không trùng lặp các ý khác.
 2. BẮT BUỘC giữ nguyên điểm số là ${currentSub?.points || 1.0} điểm.
 3. Kèm theo expected_answer (lời giải chi tiết) và scoring_rubric (biểu điểm chi tiết tổng bằng ${currentSub?.points || 1.0}đ).
-4. Trả về đối tượng JSON duy nhất:
+4. Viết công thức LaTeX dùng hai dấu gạch chéo ngược (ví dụ \\\\frac, \\\\sqrt, \\\\alpha).
+5. Trả về đối tượng JSON duy nhất:
 {
   "sub_item": {
     "item_number": "${itemLabel}",
@@ -476,8 +471,7 @@ YÊU CẦU QUAN TRỌNG:
 `;
 
   const { text } = await callDirectGeminiAPI(apiKey, prompt);
-  const cleaned = cleanJsonResponse(text);
-  const parsed = JSON.parse(cleaned);
+  const parsed = safeParseAIJson(text);
   return parsed.sub_item || parsed;
 }
 
@@ -696,8 +690,7 @@ YÊU CẦU THIẾT LẬP MA TRẬN & BẢN ĐẶC TẢ:
 
   try {
     const { text } = await callDirectGeminiAPI(apiKey, prompt);
-    const cleaned = cleanJsonResponse(text);
-    const parsed = JSON.parse(cleaned);
+    const parsed = safeParseAIJson(text);
 
     if (parsed && Array.isArray(parsed.matrixCells) && parsed.matrixCells.length > 0) {
       let cells: MatrixCellSpecification[] = parsed.matrixCells.map((c: any, idx: number) => ({

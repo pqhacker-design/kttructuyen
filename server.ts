@@ -15,6 +15,7 @@ import {
   getSupabaseAdmin,
 } from './server/admin';
 import { runUserIsolationTestSuite } from './server/testSuite';
+import { safeParseAIJson } from './src/lib/jsonRepairHelper';
 
 dotenv.config();
 
@@ -361,13 +362,7 @@ ${sampleStatementsJson}
 
     const { text: responseText, model: usedModel } = await callGeminiWithFallback(ai, prompt);
 
-    // Clean any markdown code blocks if present
-    let cleanedJson = responseText.trim();
-    if (cleanedJson.startsWith('```')) {
-      cleanedJson = cleanedJson.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-    }
-
-    const parsedData = JSON.parse(cleanedJson);
+    const parsedData = safeParseAIJson(responseText);
 
     return res.json({
       success: true,
@@ -494,11 +489,7 @@ TRẢ VỀ DUY NHẤT ĐỐI TƯỢNG JSON HỢP LỆ VỚI CẤU TRÚC:
       throw lastErr || new Error('Không thể phân tích hình ảnh SGK. Vui lòng kiểm tra lại ảnh hoặc API Key.');
     }
 
-    let cleaned = responseText;
-    if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```(json)?\n?/, '').replace(/\n?```$/, '');
-    }
-    const extractedData = JSON.parse(cleaned);
+    const extractedData = safeParseAIJson(responseText);
 
     return res.json({
       success: true,
@@ -641,11 +632,7 @@ YÊU CẦU THIẾT LẬP MA TRẬN & BẢN ĐẶC TẢ:
 `;
 
     const { text, model } = await callGeminiWithFallback(ai, prompt);
-    let cleaned = text;
-    if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```(json)?\n?/, '').replace(/\n?```$/, '');
-    }
-    const parsed = JSON.parse(cleaned);
+    const parsed = safeParseAIJson(text);
 
     return res.json({
       success: true,
@@ -691,13 +678,7 @@ YÊU CẦU:
 `;
 
     const { text: responseText } = await callGeminiWithFallback(ai, prompt);
-
-    let cleaned = responseText.trim();
-    if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-    }
-
-    const parsed = JSON.parse(cleaned);
+    const parsed = safeParseAIJson(responseText);
     return res.json({ success: true, ...parsed });
   } catch (err: any) {
     console.warn('[AI Service] Regenerate question error:', err?.message || err);
@@ -754,12 +735,7 @@ YÊU CẦU QUAN TRỌNG:
 `;
 
     const { text: responseText } = await callGeminiWithFallback(ai, prompt);
-    let cleaned = responseText.trim();
-    if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '').trim();
-    }
-
-    const parsed = JSON.parse(cleaned);
+    const parsed = safeParseAIJson(responseText);
     return res.json({ success: true, ...parsed });
   } catch (err: any) {
     console.warn('[AI Service] Regenerate essay subitem fallback:', err?.message || err);
