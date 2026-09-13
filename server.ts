@@ -514,6 +514,153 @@ TRẢ VỀ DUY NHẤT ĐỐI TƯỢNG JSON HỢP LỆ VỚI CẤU TRÚC:
   }
 });
 
+// POST /api/ai/generate-matrix
+app.post('/api/ai/generate-matrix', async (req, res) => {
+  try {
+    const {
+      subjectId,
+      grade,
+      term,
+      durationMinutes,
+      topics,
+      structure,
+      extractedTextbookContext,
+      customPromptRequirements,
+      apiKey,
+    } = req.body;
+
+    const userApiKey = (req.headers['x-gemini-api-key'] as string) || apiKey;
+    if (!userApiKey || typeof userApiKey !== 'string' || !userApiKey.trim()) {
+      return res.status(400).json({
+        success: false,
+        requiresApiKey: true,
+        error: 'Vui lòng nhập API Key để sinh ma trận và bản đặc tả bằng AI.',
+      });
+    }
+
+    const ai = getGenAIClient(userApiKey);
+    if (!ai) {
+      return res.status(400).json({
+        success: false,
+        requiresApiKey: true,
+        error: 'API Key không hợp lệ.',
+      });
+    }
+
+    const mcPart = structure?.parts?.find((p: any) => (p.part === 1 || p.type === 'single_choice') && p.enabled);
+    const tfPart = structure?.parts?.find((p: any) => (p.part === 2 || p.type === 'true_false') && p.enabled);
+    const saPart = structure?.parts?.find((p: any) => (p.part === 3 || p.type === 'short_answer') && p.enabled);
+    const essayPart = structure?.parts?.find((p: any) => (p.part === 4 || p.type === 'essay') && p.enabled);
+
+    const targetMc = mcPart?.questionCount || 0;
+    const targetTf = tfPart?.questionCount || 0;
+    const targetSa = saPart?.questionCount || 0;
+    const targetEssay = essayPart?.questionCount || 0;
+
+    const ptsPerMc = mcPart?.pointsPerQuestion || 0.25;
+    const ptsPerTf = tfPart?.pointsPerQuestion || 1.0;
+    const ptsPerSa = saPart?.pointsPerQuestion || 0.5;
+    const targetEssayPts = essayPart?.totalPoints || 0;
+
+    const recog = structure?.cognitiveDistribution?.recognition ?? 4.0;
+    const comp = structure?.cognitiveDistribution?.comprehension ?? 3.0;
+    const app = structure?.cognitiveDistribution?.application ?? 2.0;
+    const adv = structure?.cognitiveDistribution?.advanced_application ?? 1.0;
+
+    const topicsList = Array.isArray(topics) && topics.length > 0 ? topics : ['Chương I: Kiến thức trọng tâm'];
+
+    const prompt = `
+Bạn là Chuyên gia Khảo thí và Đo lường Giáo dục hàng đầu tại Việt Nam, am hiểu sâu sắc:
+- Chương trình Giáo dục Phổ thông 2018 (Thông tư 32/2018/TT-BGDĐT).
+- Công văn số 7991/BGDĐT-GDTrH ngày 17/12/2024 của Bộ GDĐT về hướng dẫn xây dựng ma trận, bản đặc tả và đề kiểm tra định kỳ cấp THCS, THPT.
+
+NHIỆM VỤ: Dựa vào PHẠM VI KIẾN THỨC và CẤU TRÚC ĐỀ KIỂM TRA, hãy TỰ ĐỘNG THIẾT LẬP KHUNG MA TRẬN VÀ BẢN ĐẶC TẢ ĐỀ KIỂM TRA CHI TIẾT (Bảng 19 cột CV 7991).
+Ma trận và Bản đặc tả này sẽ là CĂN CỨ SƯ PHẠM BẮT BUỘC để AI sinh đề kiểm tra.
+
+THÔNG TIN ĐỀ KIỂM TRA:
+- Môn học: ${subjectId}
+- Lớp: ${grade}
+- Kì kiểm tra: ${term}
+- Thời gian làm bài: ${durationMinutes} phút
+
+PHẠM VI KIẾN THỨC CẦN KIỂM TRA:
+${topicsList.map((t: string, idx: number) => `  ${idx + 1}. ${t}`).join('\n')}
+${extractedTextbookContext ? `
+⚠️ ĐẶC BIỆT LƯU Ý - NỘI DUNG TỪ ẢNH CHỤP SÁCH GIÁO KHOA (SGK):
+Giáo viên đã chụp/dán trang SGK và AI đã đọc trích xuất nội dung:
+"""
+${extractedTextbookContext}
+"""
+YÊU CẦU: Các đơn vị kiến thức (content_unit) và Bản đặc tả YCCĐ trong ma trận PHẢI BÁM SÁT 100% VÀO NỘI DUNG BÀI HỌC VÀ CÁC MỤC KIẾN THỨC TRONG ẢNH SGK NÀY!
+` : ''}
+${customPromptRequirements ? `- Yêu cầu bổ sung của giáo viên: ${customPromptRequirements}` : ''}
+
+CẤU TRÚC ĐỀ VÀ SỐ LƯỢNG CÂU HỎI BẮT BUỘC (RÀNG BUỘC TOÁN HỌC CHÍNH XÁC):
+- Phần I (Trắc nghiệm nhiều lựa chọn): ${targetMc} câu (Mỗi câu ${ptsPerMc}đ).
+- Phần II (Trắc nghiệm Đúng - Sai): ${targetTf} câu (Mỗi câu ${ptsPerTf}đ).
+- Phần III (Trắc nghiệm Trả lời ngắn): ${targetSa} câu (Mỗi câu ${ptsPerSa}đ).
+- Phần IV (Tự luận): ${targetEssay} câu (Tổng điểm tự luận = ${targetEssayPts}đ).
+- Tỷ lệ nhận thức: Nhận biết: ${recog}đ, Thông hiểu: ${comp}đ, Vận dụng: ${app}đ, Vận dụng cao: ${adv}đ.
+- TỔNG ĐIỂM TOÀN ĐỀ BẮT BUỘC = 10,0 ĐIỂM.
+
+YÊU CẦU THIẾT LẬP MA TRẬN & BẢN ĐẶC TẢ:
+1. Chia các chủ đề thành từ 2 đến 6 hàng ma trận cụ thể, mỗi hàng có:
+   - topic: Tên chủ đề / Chương
+   - content_unit: Tên bài học / Đơn vị kiến thức cụ thể cần kiểm tra
+   - learning_requirement: Bản đặc tả Yêu cầu cần đạt chi tiết theo chuẩn GDPT 2018 (Chỉ rõ mức độ: NB: ..., TH: ..., VD: ..., VDC: ...)
+2. RÀNG BUỘC TỔNG SỐ CÂU HỎI TRÊN TẤT CẢ CÁC HÀNG:
+   - Tổng (mc_rec + mc_com + mc_app) = ${targetMc}.
+   - Tổng (tf_rec + tf_com + tf_app) = ${targetTf}.
+   - Tổng (sa_rec + sa_com + sa_app) = ${targetSa}.
+   - Tổng (essay_rec + essay_com + essay_app + essay_adv) = ${targetEssay}.
+
+ĐỊNH DẠNG ĐẦU RA DUY NHẤT: Trả về đối tượng JSON:
+{
+  "matrixCells": [
+    {
+      "id": "cell-1",
+      "topic": "Tên chủ đề",
+      "content_unit": "Tên bài học / Đơn vị kiến thức cụ thể",
+      "learning_requirement": "NB: Nhận biết khái niệm, định lý... TH: Giải thích, phân biệt... VD: Vận dụng công thức giải bài toán...",
+      "mc_rec": 2,
+      "mc_com": 1,
+      "mc_app": 0,
+      "tf_rec": 0,
+      "tf_com": 1,
+      "tf_app": 0,
+      "sa_rec": 0,
+      "sa_com": 0,
+      "sa_app": 1,
+      "essay_rec": 0,
+      "essay_com": 0,
+      "essay_app": 1,
+      "essay_adv": 0
+    }
+  ]
+}
+`;
+
+    const { text, model } = await callGeminiWithFallback(ai, prompt);
+    let cleaned = text;
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```(json)?\n?/, '').replace(/\n?```$/, '');
+    }
+    const parsed = JSON.parse(cleaned);
+
+    return res.json({
+      success: true,
+      data: parsed.matrixCells || [],
+      model,
+    });
+  } catch (err: any) {
+    console.error('[AI Generate Matrix] Error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Lỗi khi AI tự động sinh ma trận.',
+    });
+  }
+});
+
 // POST /api/ai/regenerate-question
 app.post('/api/ai/regenerate-question', async (req, res) => {
   try {

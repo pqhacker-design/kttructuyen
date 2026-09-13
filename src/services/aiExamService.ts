@@ -24,6 +24,13 @@ import {
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { getUserApiKey } from './apiKeyService';
 import { isUUID, normalizeCognitiveLevel, normalizeDifficulty, normalizeQuestionType } from '../lib/idUtils';
+import {
+  generateExamDirectGemini,
+  extractTextbookDirectGemini,
+  regenerateQuestionDirectGemini,
+  regenerateEssaySubItemDirectGemini,
+  generateMatrixAndSpecDirectGemini
+} from './geminiDirectClient';
 
 export interface GenerateExamParams {
   subjectId: SubjectCode;
@@ -59,36 +66,51 @@ class AIExamService {
       throw new Error('Chưa có hình ảnh SGK nào được tải lên hoặc dán từ clipboard.');
     }
 
-    const response = await fetch('/api/ai/extract-textbook', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-gemini-api-key': userApiKey,
-      },
-      body: JSON.stringify({
+    // 1. Try server route if available
+    try {
+      const response = await fetch('/api/ai/extract-textbook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-gemini-api-key': userApiKey,
+        },
+        body: JSON.stringify({
+          images: params.images.map((img) => ({
+            base64Data: img.base64Data,
+            mimeType: img.mimeType,
+            fileName: img.fileName,
+          })),
+          subject: params.subject,
+          subjectId: params.subjectId,
+          grade: params.grade,
+          term: params.term,
+        }),
+      });
+
+      const contentType = response.headers.get('content-type') || '';
+      if (response.ok && contentType.includes('application/json')) {
+        const resData = await response.json();
+        if (resData.success && resData.data) {
+          return resData.data as TextbookExtractionResult;
+        }
+      }
+    } catch (serverErr) {
+      console.warn('[aiExamService] Server route /api/ai/extract-textbook unavailable:', serverErr);
+    }
+
+    // 2. Direct client-side Gemini Multimodal Vision fallback (works on Vercel and static hosting)
+    console.info('[aiExamService] Using direct client Gemini Vision with user API key...');
+    return await extractTextbookDirectGemini(
+      {
         images: params.images.map((img) => ({
           base64Data: img.base64Data,
           mimeType: img.mimeType,
-          fileName: img.fileName,
         })),
         subject: params.subject,
-        subjectId: params.subjectId,
         grade: params.grade,
-        term: params.term,
-      }),
-    });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `Lỗi máy chủ khi phân tích ảnh SGK: ${response.statusText}`);
-    }
-
-    const resData = await response.json();
-    if (!resData.success || !resData.data) {
-      throw new Error(resData.error || 'Không trích xuất được dữ liệu bài học từ ảnh SGK.');
-    }
-
-    return resData.data as TextbookExtractionResult;
+      },
+      userApiKey
+    );
   }
 
   /**
@@ -106,74 +128,81 @@ class AIExamService {
       params.grade <= 9 ? 'THCS' : 'THPT'
     );
 
-    // Call server-side API using the user's custom API key
-    const response = await fetch('/api/ai/generate-exam', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-gemini-api-key': userApiKey,
-      },
-      body: JSON.stringify({
-        subject: profile.name,
-        subjectCode: params.subjectId,
-        grade: params.grade,
-        term: params.term,
-        duration: params.durationMinutes,
-        topics: params.topics,
-        structure: params.structure,
-        regulation: activeReg.document_number,
-        customPrompt: params.customPromptRequirements,
-        extractedTextbookContext: params.extractedTextbookContext,
-        matrixCells: params.matrixCells,
-        apiKey: userApiKey,
-      }),
-    });
-
-    const contentType = response.headers.get('content-type') || '';
-    if (!response.ok || !contentType.includes('application/json')) {
-      let errorMsg = `Lỗi máy chủ khi sinh đề: ${response.statusText || 'Không xác định'}`;
-      if (contentType.includes('application/json')) {
-        const errData = await response.json().catch(() => ({}));
-        if (errData.error) errorMsg = errData.error;
-      } else {
-        errorMsg = 'Máy chủ backend không phản hồi JSON (có thể do môi trường triển khai tĩnh Vercel).';
+    // AI auto-generates matrix & specification first if not yet established
+    if (!params.matrixCells || params.matrixCells.length === 0) {
+      try {
+        console.info('[aiExamService] No pre-existing matrix, AI generating matrix & specification first...');
+        params.matrixCells = await this.generateMatrixAndSpecification(params);
+      } catch (matErr) {
+        console.warn('[aiExamService] Auto matrix generation fallback:', matErr);
+        params.matrixCells = this.buildDefaultMatrix(params);
       }
-      throw new Error(errorMsg);
     }
 
-    let data: any;
+    let serverData: any = null;
+
+    // 1. Try server-side Express API first (for fullstack container environment)
     try {
-      data = await response.json();
-    } catch {
-      throw new Error('Dữ liệu trả về từ AI không đúng định dạng JSON.');
-    }
-    if (data.fallback && !data.success) {
-      throw new Error(data.error || 'Mô hình AI báo lỗi hoặc chưa phản hồi.');
+      const response = await fetch('/api/ai/generate-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-gemini-api-key': userApiKey,
+        },
+        body: JSON.stringify({
+          subject: profile.name,
+          subjectCode: params.subjectId,
+          grade: params.grade,
+          term: params.term,
+          duration: params.durationMinutes,
+          topics: params.topics,
+          structure: params.structure,
+          regulation: activeReg.document_number,
+          customPrompt: params.customPromptRequirements,
+          extractedTextbookContext: params.extractedTextbookContext,
+          matrixCells: params.matrixCells,
+          apiKey: userApiKey,
+        }),
+      });
+
+      const contentType = response.headers.get('content-type') || '';
+      if (response.ok && contentType.includes('application/json')) {
+        const resJson = await response.json();
+        if (resJson && resJson.questions && resJson.questions.length > 0) {
+          serverData = resJson;
+        }
+      }
+    } catch (serverErr) {
+      console.warn('[aiExamService] Server route /api/ai/generate-exam not available:', serverErr);
     }
 
-    if (data && data.questions && data.questions.length > 0) {
-      const validation = ExamValidator.validateExam(params.structure, data.questions, params.matrixCells);
+    // 2. If server returned valid exam questions, validate and return
+    if (serverData && serverData.questions && serverData.questions.length > 0) {
+      const validation = ExamValidator.validateExam(params.structure, serverData.questions, params.matrixCells);
       return {
         exam: {
-          title: data.exam?.title || `ĐỀ KIỂM TRA ${params.term.toUpperCase()} MÔN ${profile.name.toUpperCase()} - LỚP ${params.grade}`,
+          title: serverData.exam?.title || `ĐỀ KIỂM TRA ${params.term.toUpperCase()} MÔN ${profile.name.toUpperCase()} - LỚP ${params.grade}`,
           subject: profile.name,
           grade: params.grade,
           term: params.term,
           duration_minutes: params.durationMinutes,
           total_score: 10.0,
-          instructions: data.exam?.instructions || 'Thí sinh làm bài theo đúng thời gian quy định. Không sử dụng tài liệu trừ khi có hướng dẫn riêng.',
+          instructions: serverData.exam?.instructions || 'Thí sinh làm bài theo đúng thời gian quy định. Không sử dụng tài liệu trừ khi có hướng dẫn riêng.',
         },
         structure: params.structure,
         matrix: params.matrixCells || this.buildDefaultMatrix(params),
-        questions: data.questions,
+        questions: serverData.questions,
         validation,
-        model: data.model || 'gemini-2.5-flash',
+        model: serverData.model || 'gemini-2.5-flash',
         prompt_version: 'CV7991_GDPT2018_v2',
         regulation_reference: activeReg.document_number,
       };
     }
 
-    throw new Error('Dữ liệu trả về từ Gemini AI không có câu hỏi hợp lệ.');
+    // 3. Resilient Fallback: If server route returned HTML (e.g. Vercel static deployment) or failed,
+    // directly call Gemini API with user's configured API Key!
+    console.info('[aiExamService] Server route returned HTML or unavailable (e.g. Vercel static deployment). Generating exam directly with user Gemini API key...');
+    return await generateExamDirectGemini(params, userApiKey);
   }
 
   /**
@@ -190,51 +219,102 @@ class AIExamService {
       throw new Error('Vui lòng cấu hình Gemini API Key của bạn để tạo lại câu hỏi bằng AI.');
     }
 
-    const response = await fetch('/api/ai/regenerate-question', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-gemini-api-key': userApiKey,
-      },
-      body: JSON.stringify({
-        question,
-        subjectId,
-        grade,
-        topic,
-        apiKey: userApiKey,
-      }),
-    });
-
-    const contentType = response.headers.get('content-type') || '';
-    if (!response.ok || !contentType.includes('application/json')) {
-      let errorMsg = 'Không thể tạo lại câu hỏi qua AI.';
-      if (contentType.includes('application/json')) {
-        const errData = await response.json().catch(() => ({}));
-        if (errData.error) errorMsg = errData.error;
-      }
-      throw new Error(errorMsg);
-    }
-
-    let data: any;
     try {
-      data = await response.json();
-    } catch {
-      throw new Error('Dữ liệu trả về từ AI không đúng định dạng JSON.');
-    }
-    if (data && data.question) {
-      return {
-        ...data.question,
-        id: question.id,
-        question_order: question.question_order,
-        points: question.points,
-        exam_part: question.exam_part,
-        matrix_cell_id: question.matrix_cell_id,
-        teacher_accepted: true,
-        created_by_ai: true,
-      };
+      const response = await fetch('/api/ai/regenerate-question', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-gemini-api-key': userApiKey,
+        },
+        body: JSON.stringify({
+          question,
+          subjectId,
+          grade,
+          topic,
+          apiKey: userApiKey,
+        }),
+      });
+
+      const contentType = response.headers.get('content-type') || '';
+      if (response.ok && contentType.includes('application/json')) {
+        const data = await response.json();
+        if (data && data.question) {
+          return {
+            ...data.question,
+            id: question.id,
+            question_order: question.question_order,
+            points: question.points,
+            exam_part: question.exam_part,
+            matrix_cell_id: question.matrix_cell_id,
+            teacher_accepted: true,
+            created_by_ai: true,
+          };
+        }
+      }
+    } catch (serverErr) {
+      console.warn('[aiExamService] Server regenerate question failed, switching to direct Gemini:', serverErr);
     }
 
-    throw new Error(data.error || 'AI không phản hồi câu hỏi mới.');
+    // Direct client-side question regeneration fallback
+    return await regenerateQuestionDirectGemini(
+      { question, subjectId, grade, topic },
+      userApiKey
+    );
+  }
+
+  /**
+   * AI automatically generates assessment matrix & specification table based on knowledge scope and structure
+   */
+  public async generateMatrixAndSpecification(params: GenerateExamParams): Promise<MatrixCellSpecification[]> {
+    const userApiKey = getUserApiKey();
+
+    // 1. Try server-side Express API first
+    if (userApiKey && userApiKey.trim()) {
+      try {
+        const response = await fetch('/api/ai/generate-matrix', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-gemini-api-key': userApiKey,
+          },
+          body: JSON.stringify({
+            subjectId: params.subjectId,
+            grade: params.grade,
+            term: params.term,
+            durationMinutes: params.durationMinutes,
+            topics: params.topics,
+            structure: params.structure,
+            extractedTextbookContext: params.extractedTextbookContext,
+            textbookResult: params.textbookResult,
+            customPromptRequirements: params.customPromptRequirements,
+            apiKey: userApiKey,
+          }),
+        });
+
+        const contentType = response.headers.get('content-type') || '';
+        if (response.ok && contentType.includes('application/json')) {
+          const resJson = await response.json();
+          if (resJson && resJson.success && Array.isArray(resJson.data) && resJson.data.length > 0) {
+            return resJson.data;
+          }
+        }
+      } catch (serverErr) {
+        console.warn('[aiExamService] Server generate-matrix failed or returned HTML, switching to direct Gemini:', serverErr);
+      }
+
+      // 2. Direct client-side Gemini call fallback
+      try {
+        const directMatrix = await generateMatrixAndSpecDirectGemini(params, userApiKey);
+        if (directMatrix && directMatrix.length > 0) {
+          return directMatrix;
+        }
+      } catch (directErr) {
+        console.warn('[aiExamService] Direct Gemini matrix generation error, using algorithmic matrix:', directErr);
+      }
+    }
+
+    // 3. Algorithmic fallback compliant with CV 7991 if no API key or both calls fail
+    return this.buildDefaultMatrix(params);
   }
 
   /**
@@ -1108,6 +1188,12 @@ class AIExamService {
           if (data && data.success && data.sub_item) {
             return data.sub_item;
           }
+        }
+
+        // Direct client-side Gemini fallback
+        const directSub = await regenerateEssaySubItemDirectGemini(params, userApiKey);
+        if (directSub) {
+          return directSub;
         }
       }
     } catch (e) {
