@@ -64,6 +64,8 @@ async function callGeminiWithFallback(
     try {
       const config: any = {
         responseMimeType: 'application/json',
+        maxOutputTokens: 16384,
+        temperature: 0.2,
       };
       if (responseSchema) {
         config.responseSchema = responseSchema;
@@ -300,6 +302,12 @@ QUY ĐỊNH BẮT BUỘC THEO ĐẶC THÙ MÔN HỌC:
    - Authentic English, không dùng tiếng Anh dịch thô.
    - Kiểm tra phát âm (gạch chân phần phát âm), từ vựng theo ngữ cảnh, đọc hiểu, viết câu.
 
+QUY ĐỊNH BẮT BUỘC VỀ ĐỊNH DẠNG JSON & CÔNG THỨC:
+- Toàn bộ câu trả lời BẮT BUỘC là đối tượng JSON duy nhất, hợp lệ 100%, không kèm giải thích ngoài.
+- ĐẶC BIỆT LƯU Ý VỀ DẤU NGOẶC KÉP: TUYỆT ĐỐI KHÔNG dùng dấu ngoặc kép đôi " chưa escape bên trong nội dung văn bản chuỗi (khi trích dẫn mệnh đề, từ ngữ, tên bài học, hãy dùng dấu nháy đơn '...' hoặc ngoặc góc «...» hoặc escape \\").
+- ĐẶC BIỆT LƯU Ý VỀ CÔNG THỨC TOÁN HỌC (LaTeX): Khi viết công thức toán hoặc ký hiệu trong chuỗi JSON, BẮT BUỘC dùng hai dấu gạch chéo ngược \\\\ (Ví dụ: viết \\\\frac{a}{b}, \\\\sqrt{x}, \\\\alpha, \\\\vec{u}, \\\\Delta, \\\\times, \\\\le, \\\\ge, \\\\int, \\\\sin, \\\\cos). TUYỆT ĐỐI không dùng một dấu gạch chéo ngược đơn \\ vì sẽ gây lỗi cú pháp JSON.
+- ĐẶC BIỆT LƯU Ý VỀ DẤU PHẨY: Luôn có dấu phẩy ',' ngăn cách giữa các thuộc tính trong đối tượng và các phần tử trong mảng.
+
 YÊU CẦU ĐẦU RA (ĐỊNH DẠNG JSON DUY NHẤT):
 Trả về đối tượng JSON với cấu trúc:
 {
@@ -364,9 +372,21 @@ ${sampleStatementsJson}
 
     const parsedData = safeParseAIJson(responseText);
 
+    let rawQuestions: any[] = [];
+    if (Array.isArray(parsedData)) {
+      rawQuestions = parsedData;
+    } else if (Array.isArray(parsedData?.questions)) {
+      rawQuestions = parsedData.questions;
+    } else if (Array.isArray(parsedData?.exam?.questions)) {
+      rawQuestions = parsedData.exam.questions;
+    } else if (Array.isArray(parsedData?.data?.questions)) {
+      rawQuestions = parsedData.data.questions;
+    }
+
     return res.json({
       success: true,
-      ...parsedData,
+      exam: parsedData.exam,
+      questions: rawQuestions,
       model: usedModel,
     });
   } catch (err: any) {

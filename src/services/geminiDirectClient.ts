@@ -81,6 +81,8 @@ export async function callDirectGeminiAPI(
           ],
           generationConfig: {
             responseMimeType: options?.responseMimeType || 'application/json',
+            maxOutputTokens: 16384,
+            temperature: 0.2,
           },
         }),
       });
@@ -253,8 +255,10 @@ QUY ĐỊNH BẮT BUỘC THEO ĐẶC THÙ MÔN HỌC:
    - Kiểm tra phát âm (gạch chân phần phát âm), từ vựng theo ngữ cảnh, đọc hiểu, viết câu.
 
 QUY ĐỊNH BẮT BUỘC VỀ ĐỊNH DẠNG JSON & CÔNG THỨC:
-- Toàn bộ câu trả lời BẮT BUỘC là đối tượng JSON duy nhất, không kèm giải thích ngoài.
+- Toàn bộ câu trả lời BẮT BUỘC là đối tượng JSON duy nhất, hợp lệ 100%, không kèm giải thích ngoài.
+- ĐẶC BIỆT LƯU Ý VỀ DẤU NGOẶC KÉP: TUYỆT ĐỐI KHÔNG dùng dấu ngoặc kép đôi " chưa escape bên trong nội dung văn bản chuỗi (khi trích dẫn mệnh đề, từ ngữ, tên bài học, hãy dùng dấu nháy đơn '...' hoặc ngoặc góc «...» hoặc escape \\").
 - ĐẶC BIỆT LƯU Ý VỀ CÔNG THỨC TOÁN HỌC (LaTeX): Khi viết công thức toán hoặc ký hiệu trong chuỗi JSON, BẮT BUỘC dùng hai dấu gạch chéo ngược \\\\ (Ví dụ: viết \\\\frac{a}{b}, \\\\sqrt{x}, \\\\alpha, \\\\vec{u}, \\\\Delta, \\\\times, \\\\le, \\\\ge, \\\\int, \\\\sin, \\\\cos). TUYỆT ĐỐI không dùng một dấu gạch chéo ngược đơn \\ vì sẽ gây lỗi cú pháp JSON.
+- ĐẶC BIỆT LƯU Ý VỀ DẤU PHẨY: Luôn có dấu phẩy ',' ngăn cách giữa các thuộc tính trong đối tượng và các phần tử trong mảng.
 
 YÊU CẦU ĐẦU RA (ĐỊNH DẠNG JSON DUY NHẤT):
 TrẢ VỀ ĐỐI TƯỢNG JSON VỚI CẤU TRÚC:
@@ -319,11 +323,22 @@ ${sampleStatementsJson}
   const { text: responseText, model: usedModel } = await callDirectGeminiAPI(apiKey, prompt);
   const parsedData = safeParseAIJson(responseText);
 
-  if (!parsedData || !parsedData.questions || parsedData.questions.length === 0) {
+  let rawQuestions: any[] = [];
+  if (Array.isArray(parsedData)) {
+    rawQuestions = parsedData;
+  } else if (Array.isArray(parsedData?.questions)) {
+    rawQuestions = parsedData.questions;
+  } else if (Array.isArray(parsedData?.exam?.questions)) {
+    rawQuestions = parsedData.exam.questions;
+  } else if (Array.isArray(parsedData?.data?.questions)) {
+    rawQuestions = parsedData.data.questions;
+  }
+
+  if (rawQuestions.length === 0) {
     throw new Error('Mô hình Gemini không phản hồi danh sách câu hỏi hợp lệ.');
   }
 
-  const validation = ExamValidator.validateExam(params.structure, parsedData.questions, params.matrixCells);
+  const validation = ExamValidator.validateExam(params.structure, rawQuestions, params.matrixCells);
 
   return {
     exam: {
@@ -337,7 +352,7 @@ ${sampleStatementsJson}
     },
     structure: params.structure,
     matrix: params.matrixCells || [],
-    questions: parsedData.questions,
+    questions: rawQuestions,
     validation,
     model: usedModel || 'gemini-2.5-flash',
     prompt_version: 'CV7991_GDPT2018_DirectClient_v1',

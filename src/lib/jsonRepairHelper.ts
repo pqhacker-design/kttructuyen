@@ -1,12 +1,13 @@
+import { jsonrepair } from 'jsonrepair';
+
 /**
  * JSON Repair & Sanitization Helper for AI-generated responses
  * Handles common LLM JSON artifacts:
  * - Unescaped LaTeX backslashes (\frac, \sqrt, \alpha, \times, \vec, etc.) causing "Bad escaped character in JSON"
- * - Invalid Unicode escapes (e.g. \underline, \union)
- * - Trailing commas before } or ]
+ * - Unescaped double quotes inside strings causing "Expected ',' or '}' after property value"
+ * - Missing commas between object properties or array elements
+ * - Truncated JSON outputs when reaching token limits
  * - Markdown fences (```json ... ```)
- * - Unescaped control characters or newlines inside string literals
- * - Truncated JSON brackets
  */
 
 /**
@@ -22,37 +23,16 @@ export function cleanJsonResponse(rawText: string): string {
 }
 
 /**
- * Repairs broken JSON strings containing invalid escapes, LaTeX macros, or trailing commas
+ * Escapes LaTeX formulas and non-standard backslashes inside JSON strings.
+ * Keeps valid standard JSON escape sequences intact: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
  */
-export function cleanAndRepairJson(raw: string): string {
-  if (!raw || typeof raw !== 'string') return '{}';
-  let str = raw.trim();
-  if (str.startsWith('```')) {
-    str = str.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?\s*```$/, '').trim();
-  }
-
-  const firstBrace = str.indexOf('{');
-  const firstBracket = str.indexOf('[');
-  let startIdx = -1;
-  let endIdx = -1;
-
-  if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
-    startIdx = firstBrace;
-    endIdx = str.lastIndexOf('}');
-  } else if (firstBracket !== -1) {
-    startIdx = firstBracket;
-    endIdx = str.lastIndexOf(']');
-  }
-
-  if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    str = str.slice(startIdx, endIdx + 1);
-  }
-
+export function escapeLatexInJson(str: string): string {
+  if (!str || typeof str !== 'string') return '{}';
   let inString = false;
   let result = '';
   let i = 0;
 
-  // Common LaTeX commands that start with b, f, n, r, t (which are otherwise valid JSON escapes)
+  // LaTeX commands starting with b, f, n, r, t (which are otherwise valid JSON escapes)
   const latexB = /^(egin|ar|ullet|eta|m|f|ox|matrix|ackslash|inom)/i;
   const latexF = /^(rac|lat|orall)/i;
   const latexN = /^(eq|ot|abla|u|atural|orm)/i;
@@ -108,7 +88,6 @@ export function cleanAndRepairJson(raw: string): string {
             i += 6;
             continue;
           } else {
-            // Not a valid 4-hex unicode escape (e.g. \underline, \upsilon)
             result += '\\\\u';
             i += 2;
             continue;
@@ -153,7 +132,6 @@ export function cleanAndRepairJson(raw: string): string {
 
         // ANY other character following \ is an INVALID JSON escape sequence!
         // e.g. \sqrt, \sin, \alpha, \vec, \delta, \cdot, \approx, \le, \ge, etc.
-        // Double-escape it so JSON parser receives a literal backslash.
         result += '\\\\' + next;
         i += 2;
         continue;
@@ -170,20 +148,7 @@ export function cleanAndRepairJson(raw: string): string {
         i++;
         continue;
       }
-    } else {
-      // Outside string: remove trailing commas before } or ]
-      if (char === ',') {
-        let j = i + 1;
-        while (j < str.length && /\s/.test(str[j])) {
-          j++;
-        }
-        if (str[j] === '}' || str[j] === ']') {
-          i++;
-          continue;
-        }
-      }
     }
-
     result += char;
     i++;
   }
@@ -192,50 +157,52 @@ export function cleanAndRepairJson(raw: string): string {
 }
 
 /**
- * Balances unclosed brackets/braces if the LLM output was truncated
+ * Extracts question objects if the outer JSON wrapper was completely corrupted
  */
-export function balanceJsonBrackets(str: string): string {
-  let openBraces = 0;
-  let openBrackets = 0;
-  let inString = false;
-
-  for (let i = 0; i < str.length; i++) {
-    const c = str[i];
-    if (c === '"') {
-      let backslashCount = 0;
-      let k = i - 1;
-      while (k >= 0 && str[k] === '\\') {
-        backslashCount++;
-        k--;
-      }
-      if (backslashCount % 2 === 0) {
-        inString = !inString;
-      }
-      continue;
-    }
-    if (!inString) {
-      if (c === '{') openBraces++;
-      else if (c === '}') openBraces = Math.max(0, openBraces - 1);
-      else if (c === '[') openBrackets++;
-      else if (c === ']') openBrackets = Math.max(0, openBrackets - 1);
-    }
+export function extractQuestionsFromBrokenJson(raw: string): any[] {
+  const questions: any[] = [];
+  const regex = /\{\s*"(?:id|part|content)"\s*:/g;
+  let match: RegExpExecArray | null;
+  const indices: number[] = [];
+  
+  while ((match = regex.exec(raw)) !== null) {
+    indices.push(match.index);
   }
 
-  let res = str;
-  if (inString) res += '"';
-  while (openBrackets > 0) {
-    res += ']';
-    openBrackets--;
+  for (let k = 0; k < indices.length; k++) {
+    const start = indices[k];
+    const end = k + 1 < indices.length ? indices[k + 1] : raw.length;
+    let snippet = raw.slice(start, end).trim();
+    if (snippet.endsWith(',')) snippet = snippet.slice(0, -1).trim();
+    if (snippet.endsWith(']')) snippet = snippet.slice(0, -1).trim();
+
+    try {
+      const repairedSnippet = jsonrepair(snippet);
+      const parsedSnippet = JSON.parse(repairedSnippet);
+      if (parsedSnippet && (parsedSnippet.content || parsedSnippet.id)) {
+        questions.push(parsedSnippet);
+      }
+    } catch {
+      // Try with LaTeX escape
+      try {
+        const escapedSnippet = escapeLatexInJson(snippet);
+        const repairedSnippet = jsonrepair(escapedSnippet);
+        const parsedSnippet = JSON.parse(repairedSnippet);
+        if (parsedSnippet && (parsedSnippet.content || parsedSnippet.id)) {
+          questions.push(parsedSnippet);
+        }
+      } catch {
+        // Skip irrecoverable fragment
+      }
+    }
   }
-  while (openBraces > 0) {
-    res += '}';
-    openBraces--;
-  }
-  return res;
+
+  return questions;
 }
 
 /**
- * Safe JSON parser specifically engineered for AI LLM outputs with LaTeX formulas and Vietnamese text.
+ * Robust JSON parser specifically engineered for AI LLM outputs with LaTeX formulas,
+ * Vietnamese text, unescaped quotes, missing commas, and truncated responses.
  */
 export function safeParseAIJson<T = any>(rawText: string, fallback?: T): T {
   if (!rawText || typeof rawText !== 'string') {
@@ -245,24 +212,53 @@ export function safeParseAIJson<T = any>(rawText: string, fallback?: T): T {
 
   const cleaned = cleanJsonResponse(rawText);
 
-  // Attempt 1: Standard JSON.parse
+  // Attempt 1: Native JSON.parse (fastest, standard valid JSON)
   try {
     return JSON.parse(cleaned);
-  } catch (initialErr) {
-    // Attempt 2: Clean and repair invalid escape sequences (LaTeX \sqrt, \alpha, \frac, etc.)
-    const repaired = cleanAndRepairJson(rawText);
-    try {
-      return JSON.parse(repaired);
-    } catch (secondErr: any) {
-      // Attempt 3: Balance truncated JSON brackets
-      try {
-        const balanced = balanceJsonBrackets(repaired);
-        return JSON.parse(balanced);
-      } catch (thirdErr) {
-        if (fallback !== undefined) return fallback;
-        console.error('[safeParseAIJson] Failed to parse AI JSON:', secondErr?.message, '\nRaw snippet:', rawText.slice(0, 500));
-        throw new Error(`Lỗi định dạng dữ liệu từ AI: ${secondErr?.message || 'JSON không hợp lệ'}`);
-      }
+  } catch {}
+
+  // Attempt 2: Escape LaTeX then JSON.parse
+  try {
+    const escaped = escapeLatexInJson(cleaned);
+    return JSON.parse(escaped);
+  } catch {}
+
+  // Attempt 3: Escape LaTeX then jsonrepair (solves missing commas, unescaped quotes, unclosed brackets)
+  try {
+    const escaped = escapeLatexInJson(cleaned);
+    const repaired = jsonrepair(escaped);
+    return JSON.parse(repaired);
+  } catch {}
+
+  // Attempt 4: jsonrepair first then escape LaTeX
+  try {
+    const repaired = jsonrepair(cleaned);
+    const escaped = escapeLatexInJson(repaired);
+    return JSON.parse(escaped);
+  } catch {}
+
+  // Attempt 5: jsonrepair directly
+  try {
+    const repaired = jsonrepair(cleaned);
+    return JSON.parse(repaired);
+  } catch {}
+
+  // Attempt 6: Fallback for exam generation - extract questions individually
+  try {
+    const extractedQuestions = extractQuestionsFromBrokenJson(cleaned);
+    if (extractedQuestions.length > 0) {
+      console.info(`[safeParseAIJson] Recovered ${extractedQuestions.length} questions from broken JSON wrapper.`);
+      return {
+        exam: {
+          title: 'Đề kiểm tra',
+          instructions: 'Thí sinh làm bài theo đúng thời gian quy định.',
+        },
+        questions: extractedQuestions,
+      } as unknown as T;
     }
-  }
+  } catch {}
+
+  if (fallback !== undefined) return fallback;
+  console.error('[safeParseAIJson] Failed to parse AI JSON. Snippet:', cleaned.slice(0, 500));
+  throw new Error('Dữ liệu JSON từ AI bị lỗi cú pháp và không thể tự động khôi phục. Vui lòng bấm thử lại.');
 }
