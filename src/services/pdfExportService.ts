@@ -316,20 +316,10 @@ function renderExamQuestionsHtml(
       const points = q.points ? ` (${q.points} điểm)` : '';
       const renderedContent = renderMathInHtml(q.content || '');
 
-      let topicMetaHtml = '';
-      if (q.topic || q.content_unit) {
-        const tStr = q.topic ? `Chủ đề: ${escapeHtml(q.topic)}` : '';
-        const cuStr = q.content_unit && q.content_unit !== q.topic ? `Đơn vị kiến thức: ${escapeHtml(q.content_unit)}` : '';
-        const metaText = [tStr, cuStr].filter(Boolean).join(' | ');
-        if (metaText) {
-          topicMetaHtml = `<span style="font-size: 8.5pt; color: #64748b; font-style: italic; font-weight: normal; margin-left: 6px;">[${metaText}]</span>`;
-        }
-      }
-
       bodyHtml += `
         <div class="question-block">
           <div class="question-content">
-            <strong>Câu ${qNum}${points}:</strong> ${topicMetaHtml} ${renderedContent}
+            <strong>Câu ${qNum}${points}:</strong> ${renderedContent}
           </div>
       `;
 
@@ -446,7 +436,7 @@ function renderAdministrativeHeader(
           <div class="font-italic" style="font-size: 11pt;">(Đề thi có ___ trang)</div>
         </td>
         <td style="width: 54%; text-align: center;">
-          <div class="font-bold uppercase">KỲ KIỂM TRA ĐỊNH KỲ NĂM HỌC 2024 - 2025</div>
+          <div class="font-bold uppercase">KỲ KIỂM TRA ĐỊNH KỲ NĂM HỌC 2026 - 2027</div>
           <div class="font-bold uppercase">MÔN: ${escapeHtml(subject)} - KHỐI ${grade}</div>
           <div class="font-italic" style="font-size: 11.5pt;">Thời gian làm bài: ${duration} phút (không kể thời gian phát đề)</div>
         </td>
@@ -560,19 +550,9 @@ export function exportAnswersToPdf(params: {
     const content = renderMathInHtml(q.content || '');
     const explanation = q.explanation ? renderMathInHtml(q.explanation) : '';
 
-    let topicMetaHtml = '';
-    if (q.topic || q.content_unit) {
-      const tStr = q.topic ? `Chủ đề: ${escapeHtml(q.topic)}` : '';
-      const cuStr = q.content_unit && q.content_unit !== q.topic ? `Đơn vị kiến thức: ${escapeHtml(q.content_unit)}` : '';
-      const metaText = [tStr, cuStr].filter(Boolean).join(' | ');
-      if (metaText) {
-        topicMetaHtml = `<span style="font-size: 8.5pt; color: #64748b; font-style: italic; font-weight: normal; margin-left: 6px;">[${metaText}]</span>`;
-      }
-    }
-
     bodyHtml += `
       <div class="question-block" style="border-bottom: 1px dashed #cbd5e1; padding-bottom: 10px; margin-bottom: 12px;">
-        <div><strong>Câu ${num}${points}:</strong> ${topicMetaHtml} ${content}</div>
+        <div><strong>Câu ${num}${points}:</strong> ${content}</div>
     `;
 
     // Part I correct option

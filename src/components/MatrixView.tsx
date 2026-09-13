@@ -16,6 +16,7 @@ import {
 import { Matrix, MatrixItem, Specification, SpecificationItem, Subject, CognitiveLevel, Profile } from '../types';
 import { fetchMatrices, createMatrix, deleteMatrix } from '../services/matrixService';
 import { fetchSubjects } from '../services/questionService';
+import { fetchExams, fetchExamById } from '../services/examService';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ExportModal } from './ExportModal';
 import { buildCV7991Data } from '../lib/cv7991MatrixHelper';
@@ -40,8 +41,77 @@ export const MatrixView: React.FC<MatrixViewProps> = ({
   // Deletion & Preview States
   const [matrixToDelete, setMatrixToDelete] = useState<Matrix | null>(null);
   const [previewMatrix, setPreviewMatrix] = useState<Matrix | null>(null);
+  const [linkedQuestions, setLinkedQuestions] = useState<any[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+
+  // Load linked exam questions whenever previewMatrix changes
+  useEffect(() => {
+    if (!previewMatrix) {
+      setLinkedQuestions([]);
+      return;
+    }
+
+    let isMounted = true;
+    const loadQuestionsForMatrix = async () => {
+      try {
+        const allExams = await fetchExams(currentProfile?.user_id);
+        let matchedExam = allExams.find(
+          (e) => (previewMatrix.exam_id && e.id === previewMatrix.exam_id) ||
+                 (e.matrix_id && e.matrix_id === previewMatrix.id)
+        );
+
+        if (!matchedExam && previewMatrix.name) {
+          const cleanMatrixName = previewMatrix.name
+            .replace(/^Ma trận & Bảng đặc tả - /i, '')
+            .trim()
+            .toLowerCase();
+          matchedExam = allExams.find((e) => {
+            const cleanExamTitle = (e.title || '').trim().toLowerCase();
+            return cleanExamTitle.includes(cleanMatrixName) || cleanMatrixName.includes(cleanExamTitle);
+          });
+        }
+
+        if (matchedExam && isMounted) {
+          const fullExam = await fetchExamById(matchedExam.id);
+          if (fullExam && fullExam.questions && fullExam.questions.length > 0 && isMounted) {
+            const formatted = fullExam.questions.map((eq: any, idx: number) => {
+              const q = eq.question || eq;
+              return {
+                id: q.id || eq.id || `q-${idx + 1}`,
+                content: q.content || '',
+                cognitive_level: q.cognitive_level || 'recognition',
+                question_type: q.question_type || 'single_choice',
+                points: eq.points !== undefined ? eq.points : (q.points || 0.25),
+                question_order: eq.question_order || q.question_order || idx + 1,
+                topic: q.topic || previewMatrix.name,
+                content_unit: q.content_unit || q.subtopic || '',
+                learning_requirement: q.learning_requirement || '',
+                explanation: q.explanation || '',
+                options: q.options || [],
+                statements: q.statements || [],
+                short_answer: q.short_answer,
+                essay_rubric: q.essay_rubric,
+              };
+            });
+            setLinkedQuestions(formatted);
+            return;
+          }
+        }
+        if (isMounted) {
+          setLinkedQuestions([]);
+        }
+      } catch (err) {
+        console.warn('Could not load linked exam for matrix:', err);
+        if (isMounted) setLinkedQuestions([]);
+      }
+    };
+
+    loadQuestionsForMatrix();
+    return () => {
+      isMounted = false;
+    };
+  }, [previewMatrix, currentProfile]);
 
   // Compute standard CV 7991 data for preview and export
   const previewCVData = useMemo(() => {
@@ -52,8 +122,9 @@ export const MatrixView: React.FC<MatrixViewProps> = ({
       grade: previewMatrix.grade || 10,
       durationMinutes: 45,
       matrix: previewMatrix,
+      questions: linkedQuestions.length > 0 ? linkedQuestions : undefined,
     });
-  }, [previewMatrix]);
+  }, [previewMatrix, linkedQuestions]);
 
   // New Matrix Form State
   const [name, setName] = useState('');
@@ -528,7 +599,14 @@ export const MatrixView: React.FC<MatrixViewProps> = ({
                   <Grid3X3 className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm text-white">{previewMatrix.name}</h3>
+                  <div className="flex items-center space-x-2">
+                    <h3 className="font-bold text-sm text-white">{previewMatrix.name}</h3>
+                    {linkedQuestions.length > 0 && (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-[10px] font-bold">
+                        Đã kết nối {linkedQuestions.length} câu hỏi
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[11px] text-slate-400">
                     Khung ma trận 19 cột & bản đặc tả theo chuẩn Công văn 7991/BGDĐT-GDTrH
                   </p>
@@ -620,13 +698,13 @@ export const MatrixView: React.FC<MatrixViewProps> = ({
         <ExportModal
           isOpen={isExportModalOpen}
           onClose={() => setIsExportModalOpen(false)}
-          initialDocType="matrix"
+          initialDocType={linkedQuestions.length > 0 ? "full" : "matrix"}
           examData={{
             title: previewMatrix.name,
             subject: previewMatrix.subject_name || 'Toán học',
             grade: previewMatrix.grade || 10,
             durationMinutes: 45,
-            questions: [],
+            questions: linkedQuestions,
             matrix: previewMatrix,
             cvData: previewCVData,
           }}

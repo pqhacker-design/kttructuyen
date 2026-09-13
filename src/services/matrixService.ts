@@ -55,6 +55,8 @@ export async function createMatrix(
     name: string;
     grade: number;
     description?: string;
+    cells?: any[];
+    exam_id?: string;
   },
   items: Omit<MatrixItem, 'id' | 'matrix_id'>[]
 ): Promise<Matrix | null> {
@@ -66,9 +68,17 @@ export async function createMatrix(
   try {
     const supabase = getSupabase();
 
+    const insertPayload: any = {
+      owner_id: matrix.owner_id,
+      subject_id: matrix.subject_id,
+      name: matrix.name,
+      grade: matrix.grade,
+      description: matrix.description,
+    };
+
     const { data: newMatrix, error } = await supabase
       .from('matrices')
-      .insert([matrix])
+      .insert([insertPayload])
       .select()
       .single();
 

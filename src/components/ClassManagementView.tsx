@@ -39,7 +39,7 @@ export const ClassManagementView: React.FC<ClassManagementViewProps> = ({
   // New Class Form
   const [className, setClassName] = useState('');
   const [classGrade, setClassGrade] = useState(10);
-  const [schoolYear, setSchoolYear] = useState('2025-2026');
+  const [schoolYear, setSchoolYear] = useState('2026 - 2027');
 
   // New Student Form
   const [studentName, setStudentName] = useState('');
@@ -353,11 +353,19 @@ export const ClassManagementView: React.FC<ClassManagementViewProps> = ({
                   <select
                     value={classGrade}
                     onChange={(e) => setClassGrade(parseInt(e.target.value) || 10)}
-                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white"
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 bg-white font-medium text-slate-800"
                   >
-                    <option value={10}>Khối 10</option>
-                    <option value={11}>Khối 11</option>
-                    <option value={12}>Khối 12</option>
+                    <optgroup label="Cấp Trung học cơ sở (THCS)">
+                      <option value={6}>Khối 6</option>
+                      <option value={7}>Khối 7</option>
+                      <option value={8}>Khối 8</option>
+                      <option value={9}>Khối 9</option>
+                    </optgroup>
+                    <optgroup label="Cấp Trung học phổ thông (THPT)">
+                      <option value={10}>Khối 10</option>
+                      <option value={11}>Khối 11</option>
+                      <option value={12}>Khối 12</option>
+                    </optgroup>
                   </select>
                 </div>
 
@@ -370,7 +378,7 @@ export const ClassManagementView: React.FC<ClassManagementViewProps> = ({
                     required
                     value={schoolYear}
                     onChange={(e) => setSchoolYear(e.target.value)}
-                    placeholder="2025-2026"
+                    placeholder="2026 - 2027"
                     className="w-full px-3 py-2 text-xs rounded-lg border border-slate-300"
                   />
                 </div>

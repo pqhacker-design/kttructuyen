@@ -23,6 +23,7 @@ import {
 } from './questionService';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { getUserApiKey } from './apiKeyService';
+import { mockStore } from './mockStore';
 import { isUUID, normalizeCognitiveLevel, normalizeDifficulty, normalizeQuestionType } from '../lib/idUtils';
 import {
   generateExamDirectGemini,
@@ -537,7 +538,7 @@ class AIExamService {
 
     return {
       exam: {
-        title: `ĐỀ KIỂM TRA ${params.term.toUpperCase()} NĂM HỌC 2025-2026\nMÔN: ${profile.name.toUpperCase()} - LỚP ${params.grade}`,
+        title: `ĐỀ KIỂM TRA ${params.term.toUpperCase()} NĂM HỌC 2026 - 2027\nMÔN: ${profile.name.toUpperCase()} - LỚP ${params.grade}`,
         subject: profile.name,
         grade: params.grade,
         term: params.term,
@@ -1378,27 +1379,50 @@ class AIExamService {
     // 3. Save Matrix & Specification
     let matrixId: string | null = null;
     try {
-      const matrixItems = data.matrix.map((m) => ({
-        topic: m.topic,
-        subtopic: m.content_unit,
-        cognitive_level: (m.essay_adv && m.essay_adv > 0
-          ? 'advanced_application'
-          : m.mc_app > 0 || m.sa_app > 0 || m.essay_app > 0
-          ? 'application'
-          : m.mc_com > 0 || m.tf_com > 0 || m.sa_com > 0 || m.essay_com > 0
-          ? 'comprehension'
-          : 'recognition') as any,
-        question_type: (m.essay_app > 0 || (m.essay_adv || 0) > 0
-          ? 'essay'
-          : m.sa_app > 0 || m.sa_com > 0
-          ? 'short_answer'
-          : m.tf_rec > 0 || m.tf_com > 0 || m.tf_app > 0
-          ? 'true_false'
-          : 'single_choice') as any,
-        question_count: m.total_questions,
-        points: m.total_points,
-        learning_requirement: m.learning_requirement,
-      }));
+      const matrixItems: any[] = [];
+      data.matrix.forEach((m) => {
+        const addSubItem = (
+          qType: 'single_choice' | 'true_false' | 'short_answer' | 'essay',
+          cogLevel: 'recognition' | 'comprehension' | 'application' | 'advanced_application',
+          count: number,
+          ptsEach: number
+        ) => {
+          if (count > 0) {
+            matrixItems.push({
+              topic: m.topic,
+              subtopic: m.content_unit,
+              learning_requirement: m.learning_requirement,
+              cognitive_level: cogLevel,
+              question_type: qType,
+              question_count: count,
+              points: Math.round(count * ptsEach * 100) / 100,
+            });
+          }
+        };
+
+        // Multiple choice (0.25 pts each)
+        addSubItem('single_choice', 'recognition', m.mc_rec, 0.25);
+        addSubItem('single_choice', 'comprehension', m.mc_com, 0.25);
+        addSubItem('single_choice', 'application', m.mc_app, 0.25);
+
+        // True/False (1.0 pt each)
+        addSubItem('true_false', 'recognition', m.tf_rec, 1.0);
+        addSubItem('true_false', 'comprehension', m.tf_com, 1.0);
+        addSubItem('true_false', 'application', m.tf_app, 1.0);
+
+        // Short Answer (0.5 pt each)
+        addSubItem('short_answer', 'recognition', m.sa_rec, 0.5);
+        addSubItem('short_answer', 'comprehension', m.sa_com, 0.5);
+        addSubItem('short_answer', 'application', m.sa_app, 0.5);
+
+        // Essay (variable/1.0 pt each)
+        addSubItem('essay', 'recognition', m.essay_rec, 1.0);
+        addSubItem('essay', 'comprehension', m.essay_com, 1.0);
+        addSubItem('essay', 'application', m.essay_app, 1.0);
+        if (m.essay_adv) {
+          addSubItem('essay', 'advanced_application', m.essay_adv, 1.0);
+        }
+      });
 
       const createdMatrix = await createMatrix(
         {
@@ -1407,6 +1431,7 @@ class AIExamService {
           subject_id: realSubjectId,
           grade: data.exam.grade,
           description: `Ma trận đề kiểm tra chuẩn 4 mức độ nhận thức theo ${data.regulation_reference || 'Công văn 7991/BGDĐT-GDTrH'} & GDPT 2018. Gồm ${data.matrix.length} nhóm kiến thức và bảng đặc tả chi tiết.`,
+          cells: data.matrix,
         },
         matrixItems
       );
@@ -1514,6 +1539,14 @@ class AIExamService {
     );
 
     const examId = createdExam ? createdExam.id : `exam-ai-${Date.now()}`;
+
+    if (createdExam?.id && matrixId) {
+      try {
+        mockStore.updateMatrixExamId(matrixId, createdExam.id);
+      } catch (e) {
+        // ignore
+      }
+    }
 
     // 6. Auto-generate Exam Session with Access Code for immediate student testing
     let sessionResult: { sessionId?: string; accessCode?: string } = {};

@@ -246,6 +246,8 @@ export function buildCV7991Data(params: {
     rawCells = matrix as any[];
   } else if ((matrix as any)?.cells && Array.isArray((matrix as any).cells) && (matrix as any).cells.length > 0) {
     rawCells = (matrix as any).cells;
+  } else if ((matrix as any)?.matrix_cells && Array.isArray((matrix as any).matrix_cells) && (matrix as any).matrix_cells.length > 0) {
+    rawCells = (matrix as any).matrix_cells;
   } else if ((matrix as any)?.items && Array.isArray((matrix as any).items) && (matrix as any).items.length > 0) {
     rawCells = (matrix as any).items;
   }
@@ -387,9 +389,25 @@ export function buildCV7991Data(params: {
             else if (qTier === 'com') cellRecord.sa_com += count;
             else cellRecord.sa_app += count;
           } else if (qType === 'essay') {
-            if (qTier === 'rec') cellRecord.essay_rec += count;
-            else if (qTier === 'com') cellRecord.essay_com += count;
-            else cellRecord.essay_app += count;
+            if (count >= 10) {
+              // Legacy anomaly guard: entire exam was dumped into a single essay row
+              const mcCount = Math.round(count * 0.6);
+              const tfCount = Math.max(1, Math.round(count * 0.1));
+              const saCount = Math.max(1, Math.round(count * 0.15));
+              const essayCount = Math.max(1, count - mcCount - tfCount - saCount);
+
+              cellRecord.mc_rec += Math.round(mcCount * 0.6);
+              cellRecord.mc_com += mcCount - Math.round(mcCount * 0.6);
+              cellRecord.tf_rec += Math.round(tfCount * 0.5);
+              cellRecord.tf_com += tfCount - Math.round(tfCount * 0.5);
+              cellRecord.sa_com += Math.round(saCount * 0.6);
+              cellRecord.sa_app += saCount - Math.round(saCount * 0.6);
+              cellRecord.essay_app += essayCount;
+            } else {
+              if (qTier === 'rec') cellRecord.essay_rec += count;
+              else if (qTier === 'com') cellRecord.essay_com += count;
+              else cellRecord.essay_app += count;
+            }
           }
         }
       }

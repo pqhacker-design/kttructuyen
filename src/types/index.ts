@@ -174,6 +174,8 @@ export interface Matrix {
   grade: number;
   description?: string;
   items?: MatrixItem[];
+  cells?: any[];
+  exam_id?: string;
   total_questions?: number;
   total_points?: number;
   created_at: string;

@@ -131,7 +131,23 @@ function getInitialStore(): MockDataState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      return JSON.parse(raw);
+      const parsed: MockDataState = JSON.parse(raw);
+      // Auto link any matrix to its corresponding exam if missing
+      if (parsed.matrices && parsed.exams) {
+        parsed.matrices.forEach((mat: any) => {
+          if (!mat.exam_id) {
+            const cleanMatName = (mat.name || '').replace(/^Ma trận & Bảng đặc tả - /i, '').trim().toLowerCase();
+            const match = parsed.exams.find((e: any) =>
+              (e.matrix_id && e.matrix_id === mat.id) ||
+              (cleanMatName && e.title && (e.title.toLowerCase().includes(cleanMatName) || cleanMatName.includes(e.title.toLowerCase())))
+            );
+            if (match) {
+              mat.exam_id = match.id;
+            }
+          }
+        });
+      }
+      return parsed;
     }
   } catch (e) {
     // Ignore localStorage parse errors
@@ -465,6 +481,8 @@ export const mockStore = {
       id: matId,
       subject_name: subject?.name || 'Môn học',
       items: itemsWithId,
+      cells: matrixData.cells || undefined,
+      exam_id: matrixData.exam_id || undefined,
       total_questions: totalQ,
       total_points: totalPts,
       created_at: new Date().toISOString(),
@@ -474,6 +492,13 @@ export const mockStore = {
     storeState.matrices.unshift(newMatrix);
     persistStore();
     return newMatrix;
+  },
+  updateMatrixExamId: (matrixId: string, examId: string) => {
+    const mat = storeState.matrices.find(m => m.id === matrixId);
+    if (mat) {
+      mat.exam_id = examId;
+      persistStore();
+    }
   },
   deleteMatrix: (id: string): boolean => {
     storeState.matrices = storeState.matrices.filter(m => m.id !== id);

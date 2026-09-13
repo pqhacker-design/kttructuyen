@@ -362,7 +362,7 @@ function generateOfficialExamHeader(examTitle: string, subject: string, grade: n
   `;
 
   const rightCell = `
-    ${createWordParagraph(parseTextToWordRuns('KỲ KIỂM TRA ĐỊNH KỲ NĂM HỌC 2024 - 2025', { bold: true, size: 22 }), { align: 'center' })}
+    ${createWordParagraph(parseTextToWordRuns('KỲ KIỂM TRA ĐỊNH KỲ NĂM HỌC 2026 - 2027', { bold: true, size: 22 }), { align: 'center' })}
     ${createWordParagraph(parseTextToWordRuns(`MÔN: ${subject.toUpperCase()} - KHỐI ${grade}`, { bold: true, size: 22 }), { align: 'center' })}
     ${createWordParagraph(parseTextToWordRuns(`Thời gian làm bài: ${duration} phút (không kể thời gian phát đề)`, { italic: true, size: 20 }), { align: 'center' })}
   `;
@@ -599,21 +599,10 @@ function renderQuestionsToWordXml(
       const qNum = q.question_order || currentOrder++;
       const pointsText = q.points ? ` (${q.points} điểm)` : '';
 
-      // Topic & Content unit pedagogical metadata
-      let topicMetaRuns = '';
-      if (q.topic || q.content_unit) {
-        const tStr = q.topic ? `Chủ đề: ${q.topic}` : '';
-        const cuStr = q.content_unit && q.content_unit !== q.topic ? `Đơn vị kiến thức: ${q.content_unit}` : '';
-        const metaText = [tStr, cuStr].filter(Boolean).join(' | ');
-        if (metaText) {
-          topicMetaRuns = parseTextToWordRuns(` [${metaText}]`, { italic: true, size: 20, color: '64748B' });
-        }
-      }
-
       // Question content with embedded OMML equations
       const qHeader = parseTextToWordRuns(`Câu ${qNum}${pointsText}: `, { bold: true, size: 24 });
       const qBody = parseTextToWordRuns(q.content || '', { size: 24 });
-      bodyXml += createWordParagraph(qHeader + topicMetaRuns + (topicMetaRuns ? parseTextToWordRuns('\n', { size: 10 }) : '') + qBody, { spacingBefore: 100, spacingAfter: 60 });
+      bodyXml += createWordParagraph(qHeader + qBody, { spacingBefore: 100, spacingAfter: 60 });
 
       // Options for Part I
       if (partNum === 1 && q.options && q.options.length > 0) {
@@ -770,19 +759,7 @@ export async function exportAnswersToWord(params: {
     const num = q.question_order || qOrder++;
     const points = q.points ? ` (${q.points} điểm)` : '';
 
-    let topicMetaRuns = '';
-    if (q.topic || q.content_unit) {
-      const tStr = q.topic ? `Chủ đề: ${q.topic}` : '';
-      const cuStr = q.content_unit && q.content_unit !== q.topic ? `Đơn vị kiến thức: ${q.content_unit}` : '';
-      const metaText = [tStr, cuStr].filter(Boolean).join(' | ');
-      if (metaText) {
-        topicMetaRuns = parseTextToWordRuns(` [${metaText}]`, { italic: true, size: 20, color: '64748B' });
-      }
-    }
-
     let contentXml = parseTextToWordRuns(`Câu ${num}${points}: `, { bold: true, size: 24 }) +
-      topicMetaRuns +
-      (topicMetaRuns ? parseTextToWordRuns('\n', { size: 10 }) : '') +
       parseTextToWordRuns(q.content || '', { size: 24 });
     bodyXml += createWordParagraph(contentXml, { spacingBefore: 100, spacingAfter: 40 });
 
@@ -1030,20 +1007,8 @@ export async function exportFullExamDossierToWord(params: {
     const num = q.question_order || qOrder++;
     const points = q.points ? ` (${q.points} điểm)` : '';
 
-    let topicMetaRuns = '';
-    if (q.topic || q.content_unit) {
-      const tStr = q.topic ? `Chủ đề: ${q.topic}` : '';
-      const cuStr = q.content_unit && q.content_unit !== q.topic ? `Đơn vị kiến thức: ${q.content_unit}` : '';
-      const metaText = [tStr, cuStr].filter(Boolean).join(' | ');
-      if (metaText) {
-        topicMetaRuns = parseTextToWordRuns(` [${metaText}]`, { italic: true, size: 20, color: '64748B' });
-      }
-    }
-
     bodyXml += createWordParagraph(
       parseTextToWordRuns(`Câu ${num}${points}: `, { bold: true, size: 24 }) +
-      topicMetaRuns +
-      (topicMetaRuns ? parseTextToWordRuns('\n', { size: 10 }) : '') +
       parseTextToWordRuns(q.content || '', { size: 24 }),
       { spacingBefore: 80, spacingAfter: 40 }
     );

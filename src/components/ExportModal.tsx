@@ -9,7 +9,8 @@ import {
   Printer,
   Sparkles,
   Layers,
-  Loader2
+  Loader2,
+  AlertTriangle
 } from 'lucide-react';
 import { GeneratedAIQuestion, ExamStructureConfig, MatrixCellSpecification } from '../types/aiExam';
 import { Exam, Matrix, Question } from '../types';
@@ -75,6 +76,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const currentCvData = resolvedData.cvData;
 
   const handleExport = async () => {
+    if ((docType === 'exam' || docType === 'answers') && (!questionsList || questionsList.length === 0)) {
+      alert('Ma trận này hiện chưa có danh sách câu hỏi đính kèm để xuất đề thi hoặc đáp án riêng biệt. Bạn hãy chọn mục "Ma trận & Bản đặc tả" để xuất bảng ma trận.');
+      return;
+    }
+
     setIsExporting(true);
     setExportSuccess(false);
 
@@ -202,6 +208,27 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
         {/* Body Content */}
         <div className="p-6 space-y-5">
+          {/* Questions Context Status */}
+          {questionsList && questionsList.length > 0 ? (
+            <div className="flex items-center justify-between text-xs text-slate-600 bg-emerald-50/70 p-2.5 rounded-xl border border-emerald-200">
+              <span className="flex items-center space-x-1.5 font-medium text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Hồ sơ đầy đủ: <strong>{questionsList.length} câu hỏi</strong> & Ma trận đặc tả 19 cột</span>
+              </span>
+              <span className="text-[11px] text-emerald-700 font-semibold">{currentSubject} - Khối {currentGrade}</span>
+            </div>
+          ) : (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start space-x-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold">Lưu ý về danh sách câu hỏi</div>
+                <div className="text-[11px] text-amber-700 mt-0.5 leading-relaxed">
+                  Bản ghi ma trận này chưa liên kết câu hỏi. Để xuất ma trận và bảng đặc tả, hãy chọn <strong>Ma trận & Bản đặc tả</strong>.
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Document Type Selection */}
           <div className="space-y-2">
             <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
