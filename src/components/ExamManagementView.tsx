@@ -16,7 +16,10 @@ import {
   Sparkles,
   BookOpen,
   Calendar,
-  Download
+  Download,
+  CheckSquare,
+  PenTool,
+  Filter
 } from 'lucide-react';
 import { Exam, Question, Subject, Matrix, ExamStatus, Profile } from '../types';
 import { fetchExams, createExam, deleteExam, updateExamStatus, getExamById } from '../services/examService';
@@ -96,6 +99,22 @@ export const ExamManagementView: React.FC<ExamManagementViewProps> = ({
   const [totalPoints, setTotalPoints] = useState(10.0);
   const [description, setDescription] = useState('');
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
+  const [createFormat, setCreateFormat] = useState<'hybrid' | 'multiple_choice_only' | 'essay_only'>('hybrid');
+
+  // List filter state
+  const [examFormatFilter, setExamFormatFilter] = useState<'all' | 'hybrid' | 'multiple_choice_only' | 'essay_only'>('all');
+
+  const getExamFormat = (exam: Exam): 'hybrid' | 'multiple_choice_only' | 'essay_only' => {
+    const desc = (exam.description || '').toLowerCase();
+    const t = (exam.title || '').toLowerCase();
+    if (desc.includes('100% trắc nghiệm') || t.includes('100% trắc nghiệm') || (desc.includes('trắc nghiệm') && !desc.includes('tự luận'))) {
+      return 'multiple_choice_only';
+    }
+    if (desc.includes('100% tự luận') || t.includes('100% tự luận') || (desc.includes('tự luận') && !desc.includes('trắc nghiệm'))) {
+      return 'essay_only';
+    }
+    return 'hybrid';
+  };
 
   useEffect(() => {
     loadData();
@@ -165,13 +184,22 @@ export const ExamManagementView: React.FC<ExamManagementViewProps> = ({
         points: pointsPerQuestion,
       }));
 
+      const formatPrefix = createFormat === 'multiple_choice_only'
+        ? '[100% Trắc nghiệm]'
+        : createFormat === 'essay_only'
+        ? '[100% Tự luận]'
+        : '[Trắc nghiệm + Tự luận]';
+      const formattedDescription = description.trim()
+        ? `${formatPrefix} ${description.trim()}`
+        : `${formatPrefix} Đề thi biên soạn theo định dạng chuẩn GDPT 2018.`;
+
       await createExam(
         {
           owner_id: currentProfile.user_id,
           subject_id: subjectId,
           matrix_id: matrixId || null,
           title: title.trim(),
-          description: description.trim() || undefined,
+          description: formattedDescription,
           grade,
           duration_minutes: duration,
           total_points: totalPoints,
@@ -184,6 +212,7 @@ export const ExamManagementView: React.FC<ExamManagementViewProps> = ({
       setTitle('');
       setDescription('');
       setSelectedQuestionIds([]);
+      setCreateFormat('hybrid');
       await loadData();
     } catch (err: any) {
       alert('Lỗi tạo đề thi: ' + err.message);
@@ -250,6 +279,35 @@ export const ExamManagementView: React.FC<ExamManagementViewProps> = ({
         </div>
       </div>
 
+      {/* Format Filter Bar */}
+      <div className="flex flex-wrap items-center gap-2 pb-1">
+        <div className="flex items-center space-x-1.5 text-xs font-bold text-slate-500 mr-1">
+          <Filter className="w-3.5 h-3.5 text-indigo-500" />
+          <span>Lọc dạng đề:</span>
+        </div>
+        {[
+          { id: 'all', label: `Tất cả (${exams.length})` },
+          { id: 'hybrid', label: 'Trắc nghiệm + Tự luận' },
+          { id: 'multiple_choice_only', label: '100% Trắc nghiệm' },
+          { id: 'essay_only', label: '100% Tự luận' },
+        ].map((f) => {
+          const isActive = examFormatFilter === f.id;
+          return (
+            <button
+              key={f.id}
+              onClick={() => setExamFormatFilter(f.id as any)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                isActive
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }`}
+            >
+              {f.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Exam List */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {loading ? (
@@ -269,71 +327,96 @@ export const ExamManagementView: React.FC<ExamManagementViewProps> = ({
             </button>
           </div>
         ) : (
-          exams.map((exam) => (
-            <div
-              key={exam.id}
-              className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-3 hover:border-slate-300 transition-all flex flex-col justify-between"
-            >
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="px-2 py-0.5 text-[11px] font-semibold rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100">
-                    {exam.subject_name} • Khối {exam.grade}
-                  </span>
-                  <div className="flex items-center space-x-1">
-                    <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-100 text-emerald-800">
-                      {exam.status === 'published' ? 'Đã xuất bản' : 'Bản nháp'}
-                    </span>
+          exams
+            .filter((exam) => examFormatFilter === 'all' || getExamFormat(exam) === examFormatFilter)
+            .map((exam) => {
+              const format = getExamFormat(exam);
+              return (
+                <div
+                  key={exam.id}
+                  className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-3 hover:border-slate-300 transition-all flex flex-col justify-between"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                        <span className="px-2 py-0.5 text-[11px] font-semibold rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100">
+                          {exam.subject_name} • Khối {exam.grade}
+                        </span>
+                        {format === 'multiple_choice_only' && (
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-blue-50 text-blue-700 border border-blue-200 flex items-center space-x-1">
+                            <CheckSquare className="w-3 h-3" />
+                            <span>100% TN</span>
+                          </span>
+                        )}
+                        {format === 'essay_only' && (
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-purple-50 text-purple-700 border border-purple-200 flex items-center space-x-1">
+                            <PenTool className="w-3 h-3" />
+                            <span>100% TL</span>
+                          </span>
+                        )}
+                        {format === 'hybrid' && (
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center space-x-1">
+                            <Layers className="w-3 h-3" />
+                            <span>TN + TL</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center space-x-1">
+                        <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-emerald-100 text-emerald-800">
+                          {exam.status === 'published' ? 'Đã xuất bản' : 'Bản nháp'}
+                        </span>
+                        <button
+                          onClick={() => setExamToDelete(exam)}
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors"
+                          title="Xóa đề"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <h3 className="font-bold text-slate-900 text-base leading-snug">{exam.title}</h3>
+                    {exam.description && (
+                      <p className="text-xs text-slate-500 line-clamp-2">{exam.description}</p>
+                    )}
+
+                    <div className="flex items-center space-x-3 text-xs text-slate-600 pt-1">
+                      <span className="flex items-center space-x-1">
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                        <span>{exam.duration_minutes} phút</span>
+                      </span>
+                      <span className="flex items-center space-x-1">
+                        <HelpCircle className="w-3.5 h-3.5 text-slate-400" />
+                        <span>{exam.question_count || 0} câu</span>
+                      </span>
+                      <span className="flex items-center space-x-1">
+                        <Award className="w-3.5 h-3.5 text-slate-400" />
+                        <span>{exam.total_points} điểm</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Action */}
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
                     <button
-                      onClick={() => setExamToDelete(exam)}
-                      className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors"
-                      title="Xóa đề"
+                      onClick={() => onCreateSessionFromExam(exam)}
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-colors flex items-center space-x-1"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Radio className="w-3 h-3" />
+                      <span>Mở phòng thi</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleOpenDetail(exam)}
+                      className="px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg flex items-center space-x-1 transition-colors"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>Xem chi tiết</span>
                     </button>
                   </div>
                 </div>
-
-                <h3 className="font-bold text-slate-900 text-base leading-snug">{exam.title}</h3>
-                {exam.description && (
-                  <p className="text-xs text-slate-500 line-clamp-2">{exam.description}</p>
-                )}
-
-                <div className="flex items-center space-x-3 text-xs text-slate-600 pt-1">
-                  <span className="flex items-center space-x-1">
-                    <Clock className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{exam.duration_minutes} phút</span>
-                  </span>
-                  <span className="flex items-center space-x-1">
-                    <HelpCircle className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{exam.question_count || 0} câu</span>
-                  </span>
-                  <span className="flex items-center space-x-1">
-                    <Award className="w-3.5 h-3.5 text-slate-400" />
-                    <span>{exam.total_points} điểm</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Action */}
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-                <button
-                  onClick={() => onCreateSessionFromExam(exam)}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-colors flex items-center space-x-1"
-                >
-                  <Radio className="w-3 h-3" />
-                  <span>Mở phòng thi</span>
-                </button>
-
-                <button
-                  onClick={() => handleOpenDetail(exam)}
-                  className="px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg flex items-center space-x-1 transition-colors"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>Xem chi tiết</span>
-                </button>
-              </div>
-            </div>
-          ))
+              );
+            })
         )}
       </div>
 
@@ -429,61 +512,162 @@ export const ExamManagementView: React.FC<ExamManagementViewProps> = ({
                 </div>
               </div>
 
-              {/* Question Selection List */}
-              <div className="space-y-2 pt-2">
+              {/* Dạng đề kiểm tra */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-slate-700">
-                    Chọn câu hỏi từ Ngân hàng (Đã chọn: <strong>{selectedQuestionIds.length}</strong> câu)
+                  <label className="text-xs font-bold text-slate-700 flex items-center space-x-1.5">
+                    <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Dạng đề kiểm tra *</span>
                   </label>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    {createFormat === 'hybrid' ? 'Hỗn hợp TN + Tự luận' : createFormat === 'multiple_choice_only' ? 'Chỉ Trắc nghiệm 100%' : 'Chỉ Tự luận 100%'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => {
-                      if (selectedQuestionIds.length === questions.length) {
-                        setSelectedQuestionIds([]);
-                      } else {
-                        setSelectedQuestionIds(questions.map((q) => q.id));
-                      }
+                      setCreateFormat('hybrid');
                     }}
-                    className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold"
+                    className={`p-2.5 rounded-lg border text-left transition-all ${
+                      createFormat === 'hybrid'
+                        ? 'bg-indigo-50 border-indigo-500 text-indigo-900 font-bold ring-1 ring-indigo-300'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
                   >
-                    {selectedQuestionIds.length === questions.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+                    <div className="flex items-center space-x-1.5 mb-1">
+                      <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                      <span className="text-xs font-bold">Trắc nghiệm + Tự luận</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 leading-tight">Chuẩn CV 7991 (Phần I, II, III & IV)</p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreateFormat('multiple_choice_only');
+                      setSelectedQuestionIds((prev) => 
+                        prev.filter((id) => {
+                          const q = questions.find((item) => item.id === id);
+                          return q && q.question_type !== 'essay';
+                        })
+                      );
+                    }}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${
+                      createFormat === 'multiple_choice_only'
+                        ? 'bg-blue-50 border-blue-500 text-blue-900 font-bold ring-1 ring-blue-300'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-1.5 mb-1">
+                      <CheckSquare className="w-3.5 h-3.5 text-blue-600" />
+                      <span className="text-xs font-bold">100% Trắc nghiệm</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 leading-tight">Gồm Phần I, II, III (Không tự luận)</p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreateFormat('essay_only');
+                      setSelectedQuestionIds((prev) => 
+                        prev.filter((id) => {
+                          const q = questions.find((item) => item.id === id);
+                          return q && q.question_type === 'essay';
+                        })
+                      );
+                    }}
+                    className={`p-2.5 rounded-lg border text-left transition-all ${
+                      createFormat === 'essay_only'
+                        ? 'bg-purple-50 border-purple-500 text-purple-900 font-bold ring-1 ring-purple-300'
+                        : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-1.5 mb-1">
+                      <PenTool className="w-3.5 h-3.5 text-purple-600" />
+                      <span className="text-xs font-bold">100% Tự luận</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 leading-tight">Chỉ gồm các câu tự luận có rubric</p>
                   </button>
                 </div>
-
-                <div className="border border-slate-200 rounded-xl max-h-64 overflow-y-auto divide-y divide-slate-100">
-                  {questions.map((q) => {
-                    const isSelected = selectedQuestionIds.includes(q.id);
-                    return (
-                      <div
-                        key={q.id}
-                        onClick={() => handleToggleQuestion(q.id)}
-                        className={`p-3 flex items-start space-x-3 cursor-pointer transition-colors ${
-                          isSelected ? 'bg-indigo-50/60' : 'hover:bg-slate-50'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => {}}
-                          className="mt-1 rounded text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <div className="flex-1 text-xs space-y-1">
-                          <div className="flex items-center space-x-2">
-                            <span className="font-semibold text-slate-800 capitalize">
-                              {q.cognitive_level}
-                            </span>
-                            <span className="text-slate-400">•</span>
-                            <span className="text-slate-500">
-                              {q.points} điểm
-                            </span>
-                          </div>
-                          <p className="text-slate-700 line-clamp-2">{q.content}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
               </div>
+
+              {/* Question Selection List */}
+              {(() => {
+                const availableQuestions = questions.filter((q) => {
+                  if (createFormat === 'multiple_choice_only') return q.question_type !== 'essay';
+                  if (createFormat === 'essay_only') return q.question_type === 'essay';
+                  return true;
+                });
+
+                return (
+                  <div className="space-y-2 pt-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-slate-700">
+                        Chọn câu hỏi từ Ngân hàng (Đã chọn: <strong>{selectedQuestionIds.length}</strong> / {availableQuestions.length} câu)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedQuestionIds.length === availableQuestions.length) {
+                            setSelectedQuestionIds([]);
+                          } else {
+                            setSelectedQuestionIds(availableQuestions.map((q) => q.id));
+                          }
+                        }}
+                        className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold"
+                      >
+                        {selectedQuestionIds.length === availableQuestions.length ? 'Bỏ chọn tất cả' : 'Chọn tất cả câu phù hợp'}
+                      </button>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl max-h-64 overflow-y-auto divide-y divide-slate-100">
+                      {availableQuestions.length === 0 ? (
+                        <div className="p-6 text-center text-slate-400 text-xs">
+                          Chưa có câu hỏi nào phù hợp với định dạng đã chọn trong ngân hàng.
+                        </div>
+                      ) : (
+                        availableQuestions.map((q) => {
+                          const isSelected = selectedQuestionIds.includes(q.id);
+                          return (
+                            <div
+                              key={q.id}
+                              onClick={() => handleToggleQuestion(q.id)}
+                              className={`p-3 flex items-start space-x-3 cursor-pointer transition-colors ${
+                                isSelected ? 'bg-indigo-50/60' : 'hover:bg-slate-50'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {}}
+                                className="mt-1 rounded text-indigo-600 focus:ring-indigo-500"
+                              />
+                              <div className="flex-1 text-xs space-y-1">
+                                <div className="flex items-center space-x-2">
+                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                    q.question_type === 'essay' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
+                                  }`}>
+                                    {q.question_type === 'essay' ? 'Tự luận' : 'Trắc nghiệm'}
+                                  </span>
+                                  <span className="font-semibold text-slate-800 capitalize">
+                                    {q.cognitive_level}
+                                  </span>
+                                  <span className="text-slate-400">•</span>
+                                  <span className="text-slate-500">
+                                    {q.points} điểm
+                                  </span>
+                                </div>
+                                <p className="text-slate-700 line-clamp-2">{q.content}</p>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="flex justify-end space-x-2 pt-2 border-t border-slate-200">
                 <button

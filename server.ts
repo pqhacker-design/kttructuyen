@@ -21,7 +21,8 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Initialize Google GenAI with user-supplied API key (enforce per-user API key)
 function getGenAIClient(userApiKey?: string): GoogleGenAI | null {
@@ -152,6 +153,8 @@ app.post('/api/ai/generate-exam', async (req, res) => {
       structure,
       regulation,
       customPrompt,
+      extractedTextbookContext,
+      matrixCells,
       apiKey,
     } = req.body;
 
@@ -181,6 +184,32 @@ app.post('/api/ai/generate-exam', async (req, res) => {
     const allowedSubCounts = part4Config?.allowedSubItemCounts || [1, 2, 3];
     const essayMode = part4Config?.essayAllocationMode || 'auto';
 
+    const examFormat = structure?.examFormat || (
+      part4Config && part4Config.enabled && part4Config.totalPoints > 0 && structure?.parts?.some((p: any) => p.part !== 4 && p.enabled && p.totalPoints > 0)
+        ? 'hybrid'
+        : (part4Config && part4Config.enabled && part4Config.totalPoints > 0 ? 'essay_only' : 'multiple_choice_only')
+    );
+
+    let formatRequirementText = '';
+    if (examFormat === 'multiple_choice_only') {
+      formatRequirementText = `
+⚠️ ĐẶC BIỆT CHÚ Ý - ĐỊNH DẠNG ĐỀ: 100% TRẮC NGHIỆM KHÁCH QUAN (TỔNG 10,0 ĐIỂM).
+- TUYỆT ĐỐI KHÔNG TẠO BẤT KỲ CÂU HỎI TỰ LUẬN NÀO (Phần IV: 0 câu, 0 điểm).
+- Chỉ tạo các câu hỏi thuộc Phần I, Phần II, Phần III theo đúng số lượng và điểm số trong cấu hình parts (Tổng điểm trắc nghiệm = 10,0 điểm).
+`;
+    } else if (examFormat === 'essay_only') {
+      formatRequirementText = `
+⚠️ ĐẶC BIỆT CHÚ Ý - ĐỊNH DẠNG ĐỀ: 100% TỰ LUẬN (TỔNG 10,0 ĐIỂM).
+- TUYỆT ĐỐI KHÔNG TẠO BẤT KỲ CÂU HỎI TRẮC NGHIỆM NÀO (Phần I, II, III: 0 câu, 0 điểm).
+- Toàn bộ các câu hỏi trong đề là câu tự luận thuộc Phần IV với thang điểm phân bố chuẩn tổng 10,0 điểm, có cấu trúc ý rõ ràng và rubric hướng dẫn chấm chi tiết.
+`;
+    } else {
+      formatRequirementText = `
+⚠️ ĐẶC BIỆT CHÚ Ý - ĐỊNH DẠNG ĐỀ: KẾT HỢP TRẮC NGHIỆM VÀ TỰ LUẬN (TỔNG 10,0 ĐIỂM).
+- Tạo đồng thời cả câu hỏi trắc nghiệm (Phần I, II, III) và câu hỏi tự luận (Phần IV) đúng theo số lượng và thang điểm quy định trong cấu hình parts.
+`;
+    }
+
     const statementLabels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].slice(0, statementsCount);
     const sampleStatementsJson = statementLabels.map((lbl, idx) => 
       `        { "id": "st-${lbl}", "statement": "${lbl}) Mệnh đề ${lbl}", "is_correct": ${idx % 2 === 0}, "explanation": "Giải thích chi tiết cho ý ${lbl}..." }`
@@ -201,10 +230,44 @@ THÔNG TIN ĐỀ KIỂM TRA:
 - Thời gian làm bài: ${duration} phút
 - Căn cứ văn bản pháp lý: ${regulation || 'Công văn 7991/BGDĐT-GDTrH'}
 - Chủ đề / Chương kiểm tra: ${Array.isArray(topics) ? topics.join(', ') : 'Toàn bộ nội dung học kì'}
+${extractedTextbookContext ? `
+⚠️ ĐẶC BIỆT LƯU Ý - NỘI DUNG BÁM SÁT SÁCH GIÁO KHOA (SGK):
+Giáo viên đã chụp/dán hình ảnh SGK và AI đã đọc trích xuất nội dung bài học như sau:
+"""
+${extractedTextbookContext}
+"""
+YÊU CẦU BẮT BUỘC: Tất cả câu hỏi (Phần I, II, III, IV) PHẢI BÁM SÁT 100% VÀO CÁC KHÁI NIỆM, ĐỊNH LÝ, CÔNG THỨC, BÀI ĐỌC, SỐ LIỆU VÀ DẠNG BÀI CÓ TRONG NỘI DUNG SGK NÊU TRÊN. Tuyệt đối không ra đề ngoài kiến thức bài học đã được cung cấp!
+` : ''}
+${matrixCells && Array.isArray(matrixCells) && matrixCells.length > 0 ? `
+KHUNG MA TRẬN & BẢN ĐẶC TẢ ĐÃ ĐƯỢC TỰ ĐỘNG THIẾT LẬP TRƯỚC:
+Các câu hỏi sinh ra PHẢI KHỚP HOÀN TOÀN với bảng phân bổ câu hỏi và mức độ nhận thức theo từng chủ đề sau:
+${JSON.stringify(matrixCells.map((c: any) => ({
+  topic: c.topic,
+  content_unit: c.content_unit,
+  mc_rec: c.mc_rec || 0,
+  mc_com: c.mc_com || 0,
+  mc_app: c.mc_app || 0,
+  tf_rec: c.tf_rec || 0,
+  tf_com: c.tf_com || 0,
+  tf_app: c.tf_app || 0,
+  sa_rec: c.sa_rec || 0,
+  sa_com: c.sa_com || 0,
+  sa_app: c.sa_app || 0,
+  essay_rec: c.essay_rec || 0,
+  essay_com: c.essay_com || 0,
+  essay_app: (c.essay_app || 0) + (c.essay_adv || 0),
+  yccd: c.learning_requirement
+})), null, 2)}
+` : ''}
 ${customPrompt ? `- Yêu cầu bổ sung của giáo viên: ${customPrompt}` : ''}
+${formatRequirementText}
 
 CẤU TRÚC ĐỀ VÀ THANG ĐIỂM (BẮT BUỘC TỔNG ĐIỂM = 10,0 ĐIỂM):
 ${JSON.stringify(structure, null, 2)}
+
+QUY ĐỊNH BẮT BUỘC VỀ CÁC PHẦN ĐƯỢC BẬT (ENABLED):
+- CHỈ sinh câu hỏi cho những Phần có enabled = true và questionCount > 0.
+- Nếu Phần nào có enabled = false hoặc questionCount = 0 thì TUYỆT ĐỐI KHÔNG sinh câu hỏi cho phần đó!
 
 QUY ĐỊNH BẮT BUỘC VỀ DẠNG CÂU HỎI:
 1. Phần I: Trắc nghiệm nhiều lựa chọn (chỉ 1 phương án đúng trong 4 lựa chọn A, B, C, D).
@@ -318,6 +381,135 @@ ${sampleStatementsJson}
       success: false,
       fallback: true,
       error: err?.message || 'Mô hình AI đang bận, chuyển sang động cơ khảo thí sư phạm chuẩn.',
+    });
+  }
+});
+
+// POST /api/ai/extract-textbook - Read and analyze textbook screenshots with Gemini Vision
+app.post('/api/ai/extract-textbook', async (req, res) => {
+  try {
+    const { images, subject, subjectId, grade, term, apiKey } = req.body;
+    const userApiKey = (req.headers['x-gemini-api-key'] as string) || apiKey;
+
+    if (!userApiKey || typeof userApiKey !== 'string' || !userApiKey.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Bắt buộc nhập Gemini API Key để phân tích hình ảnh SGK. Vui lòng mở Cài đặt API.',
+        requiresApiKey: true,
+      });
+    }
+
+    const ai = getGenAIClient(userApiKey);
+    if (!ai) {
+      return res.status(400).json({
+        success: false,
+        error: 'API Key người dùng không hợp lệ.',
+        requiresApiKey: true,
+      });
+    }
+
+    if (!images || !Array.isArray(images) || images.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Chưa có hình ảnh SGK nào được tải lên hoặc dán từ clipboard.',
+      });
+    }
+
+    // Build multimodal contents: array of image parts + prompt
+    const imageParts = images.map((img: any) => {
+      let base64Clean = img.base64Data || img.data || '';
+      if (base64Clean.includes(';base64,')) {
+        base64Clean = base64Clean.split(';base64,')[1];
+      }
+      return {
+        inlineData: {
+          mimeType: img.mimeType || 'image/jpeg',
+          data: base64Clean.trim(),
+        },
+      };
+    });
+
+    const promptText = `
+Bạn là Chuyên gia Khảo thí và Thẩm định chương trình GDPT 2018 môn ${subject || 'Toán học'} lớp ${grade || 10}.
+Dưới đây là ${images.length} hình ảnh chụp trực tiếp từ Sách Giáo Khoa (SGK) hoặc tài liệu bài học mà giáo viên muốn dùng làm phạm vi ra đề kiểm tra.
+
+HÃY ĐỌC TOÀN BỘ VĂN BẢN, CÔNG THỨC, HÌNH VẼ, SỐ LIỆU VÀ NỘI DUNG BÀI HỌC TRONG ẢNH VÀ TRÍCH XUẤT CHÍNH XÁC:
+1. Tên bài học / Tên chương / Chủ đề xuất hiện trong ảnh SGK (detected_lesson_title).
+2. Danh sách các chủ đề ngắn gọn (suggested_topics) để đưa vào danh mục kiểm tra.
+3. Các đơn vị kiến thức cốt lõi (content_units): các mục con, định nghĩa, định lý, công thức, số liệu, quy tắc.
+4. Yêu cầu cần đạt (YCCĐ) theo chuẩn GDPT 2018 cho bài học này ở 3 mức: Nhận biết, Thông hiểu, Vận dụng (learning_outcomes).
+5. Tóm tắt nội dung trọng tâm cần kiểm tra (key_knowledge_summary): trình bày súc tích những kiến thức quan trọng nhất để các câu hỏi trắc nghiệm và tự luận bám sát 100% vào nội dung bài học trong SGK này.
+6. Gợi ý trọng tâm kiểm tra & các dạng câu hỏi/bài tập điển hình (suggested_question_focus).
+
+TRẢ VỀ DUY NHẤT ĐỐI TƯỢNG JSON HỢP LỆ VỚI CẤU TRÚC:
+{
+  "detected_lesson_title": "Tên bài học hoặc chương nhận diện được",
+  "suggested_topics": ["Tên bài học / Chủ đề 1", "Chủ đề 2"],
+  "content_units": ["Đơn vị kiến thức 1", "Đơn vị kiến thức 2"],
+  "learning_outcomes": {
+    "recognition": "Yêu cầu cần đạt mức Nhận biết theo bài học...",
+    "comprehension": "Yêu cầu cần đạt mức Thông hiểu...",
+    "application": "Yêu cầu cần đạt mức Vận dụng..."
+  },
+  "key_knowledge_summary": "Tóm tắt chi tiết các kiến thức trọng tâm, định lý, công thức, số liệu có trong ảnh SGK...",
+  "suggested_question_focus": "Các dạng bài tập, tình huống cần đưa vào đề kiểm tra bám sát SGK..."
+}
+`;
+
+    const contents = [...imageParts, { text: promptText }];
+
+    // Models for multimodal vision
+    const candidateModels = [
+      'gemini-3.8-flash',
+      'gemini-flash-latest',
+      'gemini-3.6-flash',
+      'gemini-3.1-flash-lite',
+    ];
+
+    let responseText = '';
+    let usedModel = '';
+    let lastErr: any = null;
+
+    for (const model of candidateModels) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        });
+        if (response.text?.trim()) {
+          responseText = response.text.trim();
+          usedModel = model;
+          break;
+        }
+      } catch (err: any) {
+        lastErr = err;
+        console.warn(`[AI Vision SGK] Model ${model} failed, trying next...`, err?.message || err);
+      }
+    }
+
+    if (!responseText) {
+      throw lastErr || new Error('Không thể phân tích hình ảnh SGK. Vui lòng kiểm tra lại ảnh hoặc API Key.');
+    }
+
+    let cleaned = responseText;
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```(json)?\n?/, '').replace(/\n?```$/, '');
+    }
+    const extractedData = JSON.parse(cleaned);
+
+    return res.json({
+      success: true,
+      data: extractedData,
+      model: usedModel,
+    });
+  } catch (err: any) {
+    console.error('[AI Extract Textbook] Error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Lỗi khi phân tích hình ảnh SGK bằng AI.',
     });
   }
 });

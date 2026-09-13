@@ -772,10 +772,10 @@ export function buildCV7991Data(params: {
   );
 
   // Points distribution
-  const part1Pts = structure?.parts?.find((p) => p.part === 1)?.totalPoints ?? 3.0;
-  const part2Pts = structure?.parts?.find((p) => p.part === 2)?.totalPoints ?? 2.0;
-  const part3Pts = structure?.parts?.find((p) => p.part === 3)?.totalPoints ?? 2.0;
-  const part4Pts = structure?.parts?.find((p) => p.part === 4)?.totalPoints ?? 3.0;
+  const part1Pts = structure?.parts?.find((p) => p.part === 1 && p.enabled)?.totalPoints ?? 0;
+  const part2Pts = structure?.parts?.find((p) => p.part === 2 && p.enabled)?.totalPoints ?? 0;
+  const part3Pts = structure?.parts?.find((p) => p.part === 3 && p.enabled)?.totalPoints ?? 0;
+  const part4Pts = structure?.parts?.find((p) => p.part === 4 && p.enabled)?.totalPoints ?? 0;
 
   const cogDist = structure?.cognitiveDistribution || { recognition: 4.0, comprehension: 3.0, application: 3.0 };
   const recPts = cogDist.recognition || 4.0;

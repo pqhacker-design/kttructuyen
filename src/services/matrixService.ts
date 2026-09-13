@@ -1,6 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { Matrix, MatrixItem, Specification, SpecificationItem, CognitiveLevel, QuestionType } from '../types';
 import { mockStore } from './mockStore';
+import { isUUID, normalizeCognitiveLevel, normalizeQuestionType } from '../lib/idUtils';
 
 export async function fetchMatrices(ownerId?: string): Promise<Matrix[]> {
   if (!isSupabaseConfigured()) {
@@ -57,7 +58,8 @@ export async function createMatrix(
   },
   items: Omit<MatrixItem, 'id' | 'matrix_id'>[]
 ): Promise<Matrix | null> {
-  if (!isSupabaseConfigured()) {
+  // If Supabase is not configured or foreign keys are not UUIDs, use local mock store
+  if (!isSupabaseConfigured() || !isUUID(matrix.owner_id) || !isUUID(matrix.subject_id)) {
     return mockStore.addMatrix(matrix, items);
   }
 
@@ -75,16 +77,48 @@ export async function createMatrix(
     }
 
     if (items && items.length > 0) {
-      const itemsWithMatrixId = items.map((it) => ({
-        ...it,
-        matrix_id: newMatrix.id,
-      }));
+      const buildItemPayload = (it: any, includeLearningReq: boolean) => {
+        const payload: any = {
+          matrix_id: newMatrix.id,
+          topic: it.topic || 'Chủ đề kiến thức',
+          subtopic: it.subtopic || null,
+          cognitive_level: normalizeCognitiveLevel(it.cognitive_level),
+          question_type: normalizeQuestionType(it.question_type),
+          question_count: Math.max(1, Number(it.question_count) || 1),
+          points: Math.max(0, Number(it.points) || 1.0),
+        };
+        if (includeLearningReq && it.learning_requirement) {
+          payload.learning_requirement = it.learning_requirement;
+        }
+        return payload;
+      };
 
-      const { error: itemsErr } = await supabase.from('matrix_items').insert(itemsWithMatrixId);
+      const primaryPayload = items.map((it) => buildItemPayload(it, true));
+      const { error: itemsErr } = await supabase.from('matrix_items').insert(primaryPayload);
+
       if (itemsErr) {
-        console.error('Error inserting matrix items:', itemsErr);
+        // If learning_requirement column is missing in schema cache (PGRST204), retry gracefully without it
+        if (itemsErr.code === 'PGRST204' || itemsErr.message?.includes('learning_requirement')) {
+          console.warn('Column learning_requirement not found in remote matrix_items schema cache. Retrying without column...');
+          const fallbackPayload = items.map((it) => {
+            const item = buildItemPayload(it, false);
+            if (it.learning_requirement && !item.subtopic) {
+              item.subtopic = String(it.learning_requirement).substring(0, 200);
+            }
+            return item;
+          });
+          const { error: retryErr } = await supabase.from('matrix_items').insert(fallbackPayload);
+          if (retryErr) {
+            console.error('Error inserting fallback matrix items:', retryErr);
+          }
+        } else {
+          console.error('Error inserting matrix items:', itemsErr);
+        }
       }
     }
+
+    // Mirror to mockStore so local views stay in sync
+    mockStore.addMatrix(matrix, items);
 
     return newMatrix;
   } catch (err) {

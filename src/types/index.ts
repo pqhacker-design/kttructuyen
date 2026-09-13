@@ -156,6 +156,7 @@ export interface MatrixItem {
   matrix_id: string;
   topic: string;
   subtopic?: string;
+  learning_requirement?: string;
   cognitive_level: CognitiveLevel;
   question_type: QuestionType;
   question_count: number;

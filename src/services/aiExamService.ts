@@ -4,7 +4,9 @@ import {
   MatrixCellSpecification, 
   GeneratedAIQuestion, 
   AIExamGenerationResponse,
-  EssaySubItem
+  EssaySubItem,
+  TextbookImage,
+  TextbookExtractionResult
 } from '../types/aiExam';
 import { SubjectRuleEngine } from '../lib/subjectRuleEngine';
 import { ExamValidator } from '../lib/examValidator';
@@ -21,6 +23,7 @@ import {
 } from './questionService';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { getUserApiKey } from './apiKeyService';
+import { isUUID, normalizeCognitiveLevel, normalizeDifficulty, normalizeQuestionType } from '../lib/idUtils';
 
 export interface GenerateExamParams {
   subjectId: SubjectCode;
@@ -32,9 +35,62 @@ export interface GenerateExamParams {
   matrixCells?: MatrixCellSpecification[];
   customPromptRequirements?: string;
   sourceQuestionBankId?: string;
+  extractedTextbookContext?: string;
+  textbookResult?: TextbookExtractionResult;
 }
 
 class AIExamService {
+  /**
+   * Read and analyze textbook screenshots with Gemini Vision
+   */
+  public async extractTextbookContent(params: {
+    images: TextbookImage[];
+    subject: string;
+    subjectId: SubjectCode;
+    grade: number;
+    term?: string;
+  }): Promise<TextbookExtractionResult> {
+    const userApiKey = getUserApiKey();
+    if (!userApiKey) {
+      throw new Error('Vui lòng cấu hình Gemini API Key của bạn trong Cài đặt API để sử dụng tính năng đọc ảnh SGK bằng AI.');
+    }
+
+    if (!params.images || params.images.length === 0) {
+      throw new Error('Chưa có hình ảnh SGK nào được tải lên hoặc dán từ clipboard.');
+    }
+
+    const response = await fetch('/api/ai/extract-textbook', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-gemini-api-key': userApiKey,
+      },
+      body: JSON.stringify({
+        images: params.images.map((img) => ({
+          base64Data: img.base64Data,
+          mimeType: img.mimeType,
+          fileName: img.fileName,
+        })),
+        subject: params.subject,
+        subjectId: params.subjectId,
+        grade: params.grade,
+        term: params.term,
+      }),
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `Lỗi máy chủ khi phân tích ảnh SGK: ${response.statusText}`);
+    }
+
+    const resData = await response.json();
+    if (!resData.success || !resData.data) {
+      throw new Error(resData.error || 'Không trích xuất được dữ liệu bài học từ ảnh SGK.');
+    }
+
+    return resData.data as TextbookExtractionResult;
+  }
+
   /**
    * Main entry point to generate a complete pedagogical exam
    */
@@ -67,6 +123,8 @@ class AIExamService {
         structure: params.structure,
         regulation: activeReg.document_number,
         customPrompt: params.customPromptRequirements,
+        extractedTextbookContext: params.extractedTextbookContext,
+        matrixCells: params.matrixCells,
         apiKey: userApiKey,
       }),
     });
@@ -196,9 +254,34 @@ class AIExamService {
 
     return topics.map((t, idx) => {
       const matchedCurr = currList.find(c => c.topic === t || t.includes(c.topic) || c.topic.includes(t));
-      const contentUnit = matchedCurr && matchedCurr.units.length > 0
+      let contentUnit = matchedCurr && matchedCurr.units.length > 0
         ? matchedCurr.units.join('; ')
         : `Nội dung trọng tâm: ${t}`;
+
+      let learningReq = `Học sinh nhận biết, thông hiểu và vận dụng các kiến thức cốt lõi thuộc ${t} (${contentUnit})`;
+
+      // Enrich with Textbook extraction result if available
+      if (params.textbookResult) {
+        const tb = params.textbookResult;
+        const isMatchedTopic = tb.suggested_topics?.some(st => st.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(st.toLowerCase())) ||
+          (tb.detected_lesson_title && (tb.detected_lesson_title.toLowerCase().includes(t.toLowerCase()) || t.toLowerCase().includes(tb.detected_lesson_title.toLowerCase()))) ||
+          idx === 0;
+
+        if (isMatchedTopic) {
+          if (tb.content_units && tb.content_units.length > 0) {
+            contentUnit = tb.content_units.slice(0, 3).join('; ');
+          }
+          const outcomes = [
+            tb.learning_outcomes?.recognition ? `NB: ${tb.learning_outcomes.recognition}` : '',
+            tb.learning_outcomes?.comprehension ? `TH: ${tb.learning_outcomes.comprehension}` : '',
+            tb.learning_outcomes?.application ? `VD: ${tb.learning_outcomes.application}` : '',
+          ].filter(Boolean);
+
+          if (outcomes.length > 0) {
+            learningReq = outcomes.join('. ');
+          }
+        }
+      }
 
       const mcCount = mcPart ? Math.floor(mcPart.questionCount / totalTopics) + (idx < mcPart.questionCount % totalTopics ? 1 : 0) : 0;
       const tfCount = tfPart ? Math.floor(tfPart.questionCount / totalTopics) + (idx < tfPart.questionCount % totalTopics ? 1 : 0) : 0;
@@ -217,7 +300,7 @@ class AIExamService {
         id: `cell-${idx + 1}`,
         topic: t,
         content_unit: contentUnit,
-        learning_requirement: `Học sinh nhận biết, thông hiểu và vận dụng các kiến thức cốt lõi thuộc ${t} (${contentUnit})`,
+        learning_requirement: learningReq,
         mc_rec: Math.ceil(mcCount * 0.5),
         mc_com: Math.floor(mcCount * 0.5),
         mc_app: 0,
@@ -229,8 +312,8 @@ class AIExamService {
         sa_app: saCount,
         essay_rec: 0,
         essay_com: 0,
-        essay_app: essayCount > 0 ? 1 : 0,
-        essay_adv: idx === totalTopics - 1 ? 1 : 0,
+        essay_app: essayCount > 0 ? (essayCount > 1 ? essayCount - 1 : 1) : 0,
+        essay_adv: essayCount > 1 && idx === totalTopics - 1 ? 1 : (essayCount === 1 && idx === totalTopics - 1 ? 0 : 0),
         total_questions: qTotal,
         total_points: pts,
         percentage: ExamValidator.round2((pts / 10.0) * 100),
@@ -1085,7 +1168,20 @@ class AIExamService {
     sessionId?: string;
     accessCode?: string;
   }> {
-    const ownerId = providedOwnerId || 'demo-teacher-001';
+    let ownerId = providedOwnerId || 'demo-teacher-001';
+
+    // If Supabase is configured and ownerId is not a UUID, try to get active user's UUID
+    if (isSupabaseConfigured() && !isUUID(ownerId)) {
+      try {
+        const supabase = getSupabase();
+        const { data: authData } = await supabase.auth.getUser();
+        if (authData?.user?.id && isUUID(authData.user.id)) {
+          ownerId = authData.user.id;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
 
     // 1. Resolve or match Subject in database / mock store
     let realSubjectId = '';
@@ -1107,7 +1203,10 @@ class AIExamService {
         );
       }
 
-      if (matched) {
+      if (matched && isUUID(matched.id)) {
+        realSubjectId = matched.id;
+        realSubjectName = matched.name;
+      } else if (matched) {
         realSubjectId = matched.id;
         realSubjectName = matched.name;
       } else {
@@ -1128,21 +1227,35 @@ class AIExamService {
       }
     } catch (e) {
       console.warn('Error resolving subject:', e);
-      realSubjectId = 'subj-toan-10';
+      realSubjectId = isSupabaseConfigured() ? '' : 'subj-toan-10';
+    }
+
+    // If Supabase is active and realSubjectId is still not a UUID, query Supabase directly
+    if (isSupabaseConfigured() && !isUUID(realSubjectId)) {
+      try {
+        const supabase = getSupabase();
+        const { data: dbSubjs } = await supabase.from('subjects').select('id, name').limit(1);
+        if (dbSubjs && dbSubjs.length > 0 && isUUID(dbSubjs[0].id)) {
+          realSubjectId = dbSubjs[0].id;
+          realSubjectName = dbSubjs[0].name;
+        }
+      } catch (e) {
+        // ignore
+      }
     }
 
     // 2. Resolve or create dedicated Question Bank for this Subject & Grade
     let realBankId = '';
     try {
-      const banks = await fetchQuestionBanks(ownerId);
+      const banks = await fetchQuestionBanks(isUUID(ownerId) ? ownerId : undefined);
       let matchedBank = banks.find(b => b.subject_id === realSubjectId);
       if (!matchedBank && banks.length > 0) {
         matchedBank = banks.find(b => b.subject_name?.toLowerCase().includes(realSubjectName.toLowerCase()));
       }
 
-      if (matchedBank) {
+      if (matchedBank && (!isSupabaseConfigured() || isUUID(matchedBank.id))) {
         realBankId = matchedBank.id;
-      } else {
+      } else if (isUUID(ownerId) && isUUID(realSubjectId)) {
         const newBank = await createQuestionBank({
           name: `Ngân hàng câu hỏi ${realSubjectName} ${data.exam.grade} (CV 7991)`,
           subject_id: realSubjectId,
@@ -1151,13 +1264,28 @@ class AIExamService {
         });
         if (newBank) {
           realBankId = newBank.id;
-        } else if (banks.length > 0) {
+        } else if (banks.length > 0 && isUUID(banks[0].id)) {
           realBankId = banks[0].id;
         }
+      } else if (banks.length > 0) {
+        realBankId = banks[0].id;
       }
     } catch (e) {
       console.warn('Error resolving question bank:', e);
-      realBankId = 'bank-toan-10';
+      realBankId = isSupabaseConfigured() ? '' : 'bank-toan-10';
+    }
+
+    // If Supabase is active and realBankId is still not a UUID, check if any bank exists
+    if (isSupabaseConfigured() && !isUUID(realBankId)) {
+      try {
+        const supabase = getSupabase();
+        const { data: anyBank } = await supabase.from('question_banks').select('id').limit(1);
+        if (anyBank && anyBank.length > 0 && isUUID(anyBank[0].id)) {
+          realBankId = anyBank[0].id;
+        }
+      } catch (e) {
+        // ignore
+      }
     }
 
     // 3. Save Matrix & Specification
@@ -1249,16 +1377,22 @@ class AIExamService {
           fullExplanation = `${fullExplanation}\n\n[Hướng dẫn chấm]:\n${rubricStr}`;
         }
 
+        const normalizedType = normalizeQuestionType(aiQ.question_type);
+        const normalizedCog = normalizeCognitiveLevel(aiQ.cognitive_level);
+        const normalizedDiff = normalizeDifficulty(
+          aiQ.is_advanced_application ? 'hard' : (normalizedCog === 'recognition' ? 'easy' : normalizedCog === 'comprehension' ? 'medium' : 'hard')
+        );
+
         const qRecord = await createQuestion(
           {
             question_bank_id: realBankId,
             owner_id: ownerId,
             subject_id: realSubjectId,
             content: aiQ.content,
-            question_type: aiQ.question_type,
-            difficulty: aiQ.is_advanced_application ? 'hard' : (aiQ.cognitive_level === 'recognition' ? 'easy' : aiQ.cognitive_level === 'comprehension' ? 'medium' : 'hard'),
-            cognitive_level: aiQ.cognitive_level,
-            points: aiQ.points,
+            question_type: normalizedType,
+            difficulty: normalizedDiff,
+            cognitive_level: normalizedCog,
+            points: Math.max(0, Number(aiQ.points) || 1.0),
             explanation: fullExplanation.trim(),
           },
           optionsToSave

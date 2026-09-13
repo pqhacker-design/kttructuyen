@@ -1,6 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { Question, QuestionBank, QuestionOption, Subject, CognitiveLevel, QuestionType, Difficulty } from '../types';
 import { mockStore } from './mockStore';
+import { isUUID, normalizeCognitiveLevel, normalizeDifficulty, normalizeQuestionType } from '../lib/idUtils';
 
 export async function fetchSubjects(): Promise<Subject[]> {
   if (!isSupabaseConfigured()) {
@@ -89,7 +90,7 @@ export async function createQuestionBank(bank: {
   description?: string;
   owner_id: string;
 }): Promise<QuestionBank | null> {
-  if (!isSupabaseConfigured()) {
+  if (!isSupabaseConfigured() || !isUUID(bank.owner_id) || !isUUID(bank.subject_id)) {
     return mockStore.addBank(bank);
   }
 
@@ -104,6 +105,7 @@ export async function createQuestionBank(bank: {
     if (error) {
       throw new Error(error.message);
     }
+    mockStore.addBank(bank);
     return data;
   } catch (err) {
     return mockStore.addBank(bank);
@@ -179,31 +181,52 @@ export async function createQuestion(
   },
   options: { content: string; is_correct: boolean; option_order: number }[]
 ): Promise<Question | null> {
-  if (!isSupabaseConfigured()) {
+  // If Supabase is not configured or any of the foreign keys are not UUIDs, use local mock store
+  if (
+    !isSupabaseConfigured() ||
+    !isUUID(question.question_bank_id) ||
+    !isUUID(question.owner_id) ||
+    !isUUID(question.subject_id)
+  ) {
     return mockStore.addQuestion(question, options);
   }
 
   try {
     const supabase = getSupabase();
 
+    // Sanitize question fields to strictly adhere to Postgres schema checks
+    const sanitizedQuestion = {
+      question_bank_id: question.question_bank_id,
+      owner_id: question.owner_id,
+      subject_id: question.subject_id,
+      content: question.content || 'Câu hỏi',
+      question_type: normalizeQuestionType(question.question_type),
+      difficulty: normalizeDifficulty(question.difficulty),
+      cognitive_level: normalizeCognitiveLevel(question.cognitive_level),
+      points: Math.max(0, Number(question.points) || 1.0),
+      explanation: question.explanation || null,
+    };
+
     // 1. Insert question
     const { data: newQ, error: qErr } = await supabase
       .from('questions')
-      .insert([question])
+      .insert([sanitizedQuestion])
       .select()
       .single();
 
     if (qErr) {
+      console.error('Failed inserting question to Supabase:', qErr);
       throw new Error(qErr.message);
     }
 
     // 2. Insert options if single or multiple choice
+    let optsWithQId: any[] = [];
     if (options && options.length > 0) {
-      const optsWithQId = options.map((opt) => ({
+      optsWithQId = options.map((opt) => ({
         question_id: newQ.id,
         content: opt.content,
-        is_correct: opt.is_correct,
-        option_order: opt.option_order,
+        is_correct: !!opt.is_correct,
+        option_order: opt.option_order || 1,
       }));
 
       const { error: optErr } = await supabase.from('question_options').insert(optsWithQId);
@@ -212,14 +235,26 @@ export async function createQuestion(
       }
     }
 
-    // Refetch full question with options
-    const { data: fullQ } = await supabase
-      .from('questions')
-      .select('*, options:question_options(*)')
-      .eq('id', newQ.id)
-      .single();
+    // Mirror to mock store as well for instant client-side lookup
+    mockStore.addQuestion(sanitizedQuestion, options);
 
-    return fullQ;
+    // Refetch full question with options or construct returned question
+    try {
+      const { data: fullQ } = await supabase
+        .from('questions')
+        .select('*, options:question_options(*)')
+        .eq('id', newQ.id)
+        .single();
+
+      if (fullQ) return fullQ;
+    } catch {
+      // ignore
+    }
+
+    return {
+      ...newQ,
+      options: optsWithQId,
+    };
   } catch (err) {
     return mockStore.addQuestion(question, options);
   }

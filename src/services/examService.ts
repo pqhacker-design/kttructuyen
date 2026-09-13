@@ -1,6 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { Exam, ExamQuestion, ExamStatus } from '../types';
 import { mockStore } from './mockStore';
+import { isUUID } from '../lib/idUtils';
 
 export async function fetchExams(ownerId?: string): Promise<Exam[]> {
   if (!isSupabaseConfigured()) {
@@ -117,7 +118,8 @@ export async function createExam(
   },
   questionItems: { question_id: string; points: number; question_order: number }[]
 ): Promise<Exam | null> {
-  if (!isSupabaseConfigured()) {
+  // If Supabase is not configured or foreign keys are not UUIDs, use local mock store
+  if (!isSupabaseConfigured() || !isUUID(exam.owner_id) || !isUUID(exam.subject_id)) {
     const newExam = mockStore.addExam(exam);
     if (questionItems && questionItems.length > 0) {
       for (const item of questionItems) {
@@ -130,10 +132,19 @@ export async function createExam(
   try {
     const supabase = getSupabase();
 
+    // Prepare payload, ensuring matrix_id and specification_id are only provided if valid UUID
+    const examPayload: any = { ...exam };
+    if (examPayload.matrix_id && !isUUID(examPayload.matrix_id)) {
+      delete examPayload.matrix_id;
+    }
+    if (examPayload.specification_id && !isUUID(examPayload.specification_id)) {
+      delete examPayload.specification_id;
+    }
+
     // 1. Insert Exam
     const { data: newExam, error: examErr } = await supabase
       .from('exams')
-      .insert([exam])
+      .insert([examPayload])
       .select()
       .single();
 
@@ -141,18 +152,29 @@ export async function createExam(
       throw new Error(examErr.message);
     }
 
-    // 2. Insert Exam Questions
+    // 2. Insert Exam Questions (Strictly filter out non-UUID question_id to prevent 22P02 error)
     if (questionItems && questionItems.length > 0) {
-      const examQuestionsData = questionItems.map((item, idx) => ({
-        exam_id: newExam.id,
-        question_id: item.question_id,
-        question_order: item.question_order || idx + 1,
-        points: item.points,
-      }));
+      const validQuestions = questionItems.filter((item) => isUUID(item.question_id));
+      if (validQuestions.length > 0) {
+        const examQuestionsData = validQuestions.map((item, idx) => ({
+          exam_id: newExam.id,
+          question_id: item.question_id,
+          question_order: item.question_order || idx + 1,
+          points: item.points,
+        }));
 
-      const { error: eqErr } = await supabase.from('exam_questions').insert(examQuestionsData);
-      if (eqErr) {
-        console.error('Error inserting exam questions:', eqErr);
+        const { error: eqErr } = await supabase.from('exam_questions').insert(examQuestionsData);
+        if (eqErr) {
+          console.error('Error inserting exam questions:', eqErr);
+        }
+      }
+    }
+
+    // Mirror to mockStore so local store remains synchronized
+    const localExam = mockStore.addExam(exam);
+    if (questionItems && questionItems.length > 0) {
+      for (const item of questionItems) {
+        mockStore.addQuestionToExam(localExam.id, item.question_id, item.points);
       }
     }
 

@@ -27,7 +27,15 @@ import {
   Info,
   Sliders,
   Percent,
-  Cpu
+  Cpu,
+  CheckSquare,
+  PenTool,
+  Layers,
+  ListChecks,
+  Camera,
+  Image as ImageIcon,
+  Eye,
+  Table
 } from 'lucide-react';
 import { 
   SubjectCode, 
@@ -36,8 +44,19 @@ import {
   AIExamGenerationResponse, 
   MatrixCellSpecification,
   LegalRegulation,
-  EssayQuestionConfig
+  EssayQuestionConfig,
+  ExamFormatType,
+  HybridRatioType,
+  TextbookExtractionResult
 } from '../types/aiExam';
+import { TextbookScopeVisionUploader } from './TextbookScopeVisionUploader';
+import { 
+  getFormatPresets, 
+  applyExamFormat, 
+  getExamFormatInfo, 
+  detectExamFormat, 
+  ExamFormatPreset 
+} from '../lib/examFormatHelper';
 import { SubjectRuleEngine } from '../lib/subjectRuleEngine';
 import { ExamValidator } from '../lib/examValidator';
 import { aiExamService, GenerateExamParams } from '../services/aiExamService';
@@ -91,8 +110,51 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
     return JSON.parse(JSON.stringify(p.default_structure));
   });
 
+  // Exam format states: 'multiple_choice_only' | 'essay_only' | 'hybrid'
+  const [examFormat, setExamFormat] = useState<ExamFormatType>(() => {
+    const p = SubjectRuleEngine.getProfile('toan');
+    return detectExamFormat(p.default_structure);
+  });
+  const [hybridRatio, setHybridRatio] = useState<HybridRatioType>('70_30');
+
+  const formatInfo = React.useMemo(() => {
+    return getExamFormatInfo({
+      ...structure,
+      examFormat,
+      hybridRatio,
+    });
+  }, [structure, examFormat, hybridRatio]);
+
+  const currentFormatPresets = React.useMemo(() => {
+    return getFormatPresets(examFormat, selectedSubject);
+  }, [examFormat, selectedSubject]);
+
+  const handleSelectFormat = (newFormat: ExamFormatType, newRatio: HybridRatioType = hybridRatio) => {
+    setExamFormat(newFormat);
+    if (newRatio) setHybridRatio(newRatio);
+    const updated = applyExamFormat(structure, newFormat, newRatio, selectedSubject);
+    setStructure(updated);
+  };
+
+  const handleApplyPreset = (preset: ExamFormatPreset) => {
+    setStructure((prev) => ({
+      ...prev,
+      totalScore: 10.0,
+      examFormat: preset.format,
+      hybridRatio: preset.ratio || prev.hybridRatio,
+      parts: JSON.parse(JSON.stringify(preset.parts)),
+      cognitiveDistribution: JSON.parse(JSON.stringify(preset.cognitiveDistribution)),
+    }));
+    setExamFormat(preset.format);
+    if (preset.ratio) setHybridRatio(preset.ratio);
+  };
+
   // Step 3: Matrix
   const [matrixCells, setMatrixCells] = useState<MatrixCellSpecification[]>([]);
+
+  // Textbook OCR / Vision Extraction State
+  const [textbookResult, setTextbookResult] = useState<TextbookExtractionResult | null>(null);
+  const [extractedTextbookContext, setExtractedTextbookContext] = useState<string>('');
 
   // Step 4 & 5: Generated Exam & Results
   const [isGenerating, setIsGenerating] = useState(false);
@@ -119,6 +181,8 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
   // When subject or grade changes, update profile and default topics
   useEffect(() => {
     const profile = SubjectRuleEngine.getProfile(selectedSubject);
+    const detected = detectExamFormat(profile.default_structure);
+    setExamFormat(detected);
     setStructure(JSON.parse(JSON.stringify(profile.default_structure)));
     setDurationMinutes(profile.default_duration);
 
@@ -130,7 +194,7 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
     setActiveRegulation(reg);
   }, [selectedSubject, grade]);
 
-  // When topics or structure change, recalculate matrix
+  // When topics, structure, or textbook result change, automatically recalculate matrix & specs
   useEffect(() => {
     const cells = aiExamService.buildDefaultMatrix({
       subjectId: selectedSubject,
@@ -139,9 +203,10 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
       durationMinutes,
       topics: selectedTopics,
       structure,
+      textbookResult: textbookResult || undefined,
     });
     setMatrixCells(cells);
-  }, [selectedSubject, grade, term, durationMinutes, selectedTopics, structure]);
+  }, [selectedSubject, grade, term, durationMinutes, selectedTopics, structure, textbookResult]);
 
   const currentProfileData = SubjectRuleEngine.getProfile(selectedSubject);
 
@@ -177,57 +242,117 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
     const enabledParts = structure.parts.filter((p) => p.enabled);
     if (enabledParts.length === 0) return;
 
-    const newParts = structure.parts.map((p) => {
-      if (!p.enabled) return p;
-      return { ...p };
-    });
+    const newParts = structure.parts.map((p) => ({ ...p }));
 
-    // Default pedagogical weights by subject
-    if (selectedSubject === 'ngu_van') {
-      const p1 = newParts.find((p) => p.part === 1);
+    if (examFormat === 'multiple_choice_only') {
+      // Multiple choice only: disable Part 4, balance Parts 1, 2, 3
       const p4 = newParts.find((p) => p.part === 4);
-      if (p1 && p4) {
-        p1.totalPoints = 4.0;
-        p1.pointsPerQuestion = ExamValidator.round2(4.0 / (p1.questionCount || 8));
-        p4.totalPoints = 6.0;
-        if (p4.essayQuestions && p4.essayQuestions.length >= 2) {
-          p4.essayQuestions[0].points = 2.0;
-          p4.essayQuestions[1].points = 4.0;
+      if (p4) {
+        p4.enabled = false;
+        p4.totalPoints = 0;
+        p4.questionCount = 0;
+      }
+
+      const enabledMc = newParts.filter((p) => p.part !== 4 && p.enabled);
+      if (enabledMc.length === 1) {
+        enabledMc[0].totalPoints = 10.0;
+        if (enabledMc[0].questionCount > 0) {
+          enabledMc[0].pointsPerQuestion = ExamValidator.round2(10.0 / enabledMc[0].questionCount);
+        }
+      } else if (enabledMc.length > 1) {
+        const sum = enabledMc.reduce((acc, p) => acc + p.totalPoints, 0);
+        const diff = ExamValidator.round2(10.0 - sum);
+        const last = enabledMc[enabledMc.length - 1];
+        if (last) {
+          last.totalPoints = ExamValidator.round2(Math.max(0, last.totalPoints + diff));
+          if (last.questionCount > 0 && last.type === 'short_answer') {
+            last.pointsPerQuestion = ExamValidator.round2(last.totalPoints / last.questionCount);
+          }
+        }
+      }
+    } else if (examFormat === 'essay_only') {
+      // Essay only: disable Parts 1, 2, 3, set Part 4 to 10.0
+      newParts.forEach((p) => {
+        if (p.part !== 4) {
+          p.enabled = false;
+          p.totalPoints = 0;
+          p.questionCount = 0;
+        }
+      });
+      const p4 = newParts.find((p) => p.part === 4);
+      if (p4) {
+        p4.enabled = true;
+        p4.totalPoints = 10.0;
+        if (p4.questionCount <= 0) p4.questionCount = 2;
+        if (p4.essayQuestions && p4.essayQuestions.length > 0) {
+          const count = p4.essayQuestions.length;
+          const avg = ExamValidator.round2(10.0 / count);
+          p4.essayQuestions.forEach((eq, idx) => {
+            if (idx === count - 1) {
+              const prev = ExamValidator.round2(avg * (count - 1));
+              eq.points = ExamValidator.round2(10.0 - prev);
+            } else {
+              eq.points = avg;
+            }
+          });
         }
       }
     } else {
-      // Standard 4 parts
-      const p1 = newParts.find((p) => p.part === 1 && p.enabled);
-      const p2 = newParts.find((p) => p.part === 2 && p.enabled);
-      const p3 = newParts.find((p) => p.part === 3 && p.enabled);
-      const p4 = newParts.find((p) => p.part === 4 && p.enabled);
-
-      if (p1 && p2 && p3 && p4) {
-        p1.totalPoints = 3.0;
-        p1.pointsPerQuestion = 0.25;
-        p1.questionCount = 12;
-
-        p2.totalPoints = 2.0;
-        p2.pointsPerQuestion = 1.0;
-        p2.questionCount = 2;
-
-        p3.totalPoints = 2.0;
-        p3.pointsPerQuestion = 0.5;
-        p3.questionCount = 4;
-
-        p4.totalPoints = 3.0;
-        p4.questionCount = 2;
-        if (p4.essayQuestions && p4.essayQuestions.length >= 2) {
-          p4.essayQuestions[0].points = 2.0;
-          p4.essayQuestions[1].points = 1.0;
+      // Hybrid format
+      if (selectedSubject === 'ngu_van') {
+        const p1 = newParts.find((p) => p.part === 1 && p.enabled);
+        const p4 = newParts.find((p) => p.part === 4 && p.enabled);
+        if (p1 && p4) {
+          p1.totalPoints = 4.0;
+          p1.pointsPerQuestion = ExamValidator.round2(4.0 / (p1.questionCount || 8));
+          p4.totalPoints = 6.0;
+          if (p4.essayQuestions && p4.essayQuestions.length >= 2) {
+            p4.essayQuestions[0].points = 2.0;
+            p4.essayQuestions[1].points = 4.0;
+          }
         }
       } else {
-        // Distribute remaining points evenly
-        const sum = newParts.reduce((acc, p) => (p.enabled ? acc + p.totalPoints : acc), 0);
-        const diff = ExamValidator.round2(10.0 - sum);
-        const lastEnabled = [...newParts].reverse().find((p) => p.enabled);
-        if (lastEnabled) {
-          lastEnabled.totalPoints = ExamValidator.round2(lastEnabled.totalPoints + diff);
+        // Standard 4 parts or ratio-based
+        const p1 = newParts.find((p) => p.part === 1 && p.enabled);
+        const p2 = newParts.find((p) => p.part === 2 && p.enabled);
+        const p3 = newParts.find((p) => p.part === 3 && p.enabled);
+        const p4 = newParts.find((p) => p.part === 4 && p.enabled);
+
+        if (p1 && p2 && p3 && p4) {
+          if (hybridRatio === '50_50') {
+            p1.totalPoints = 3.0;
+            p2.totalPoints = 2.0;
+            p3.totalPoints = 0.0;
+            p3.enabled = false;
+            p4.totalPoints = 5.0;
+          } else {
+            p1.totalPoints = 3.0;
+            p1.pointsPerQuestion = 0.25;
+            p1.questionCount = 12;
+
+            p2.totalPoints = 2.0;
+            p2.pointsPerQuestion = 1.0;
+            p2.questionCount = 2;
+
+            p3.totalPoints = 2.0;
+            p3.pointsPerQuestion = 0.5;
+            p3.questionCount = 4;
+
+            p4.totalPoints = 3.0;
+            p4.questionCount = 2;
+            if (p4.essayQuestions && p4.essayQuestions.length >= 2) {
+              p4.essayQuestions[0].points = 2.0;
+              p4.essayQuestions[1].points = 1.0;
+            }
+          }
+        } else {
+          // Distribute remaining points to the last enabled part
+          const sum = newParts.reduce((acc, p) => (p.enabled ? acc + p.totalPoints : acc), 0);
+          const diff = ExamValidator.round2(10.0 - sum);
+          const lastEnabled = [...newParts].reverse().find((p) => p.enabled);
+          if (lastEnabled) {
+            lastEnabled.totalPoints = ExamValidator.round2(Math.max(0, lastEnabled.totalPoints + diff));
+          }
         }
       }
     }
@@ -423,9 +548,14 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
         term,
         durationMinutes,
         topics: selectedTopics,
-        structure,
+        structure: {
+          ...structure,
+          examFormat,
+          hybridRatio: examFormat === 'hybrid' ? hybridRatio : undefined,
+        },
         matrixCells,
         customPromptRequirements: customPrompt,
+        extractedTextbookContext: extractedTextbookContext || undefined,
       });
 
       setGeneratedExamData(response);
@@ -776,6 +906,139 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
             </div>
           </div>
 
+          {/* Dạng đề thi mong muốn (Exam Format Selector) */}
+          <div className="p-5 bg-gradient-to-br from-indigo-50/50 via-white to-sky-50/30 border border-indigo-100 rounded-2xl shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <Layers className="w-4 h-4 text-indigo-600" />
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Dạng đề kiểm tra mong muốn *
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Tùy chọn hình thức ra đề: Trắc nghiệm 100%, Tự luận 100% hoặc Kết hợp Trắc nghiệm + Tự luận
+                </p>
+              </div>
+
+              <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold border self-start sm:self-auto ${formatInfo.badgeColor}`}>
+                {formatInfo.label}
+              </span>
+            </div>
+
+            {/* 3 Interactive Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* Card 1: Hybrid */}
+              <button
+                type="button"
+                onClick={() => handleSelectFormat('hybrid')}
+                className={`text-left p-4 rounded-xl border-2 transition-all cursor-pointer relative ${
+                  examFormat === 'hybrid'
+                    ? 'bg-indigo-50/80 border-indigo-500 shadow-xs ring-2 ring-indigo-200/60'
+                    : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/60'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className={`p-2 rounded-lg ${examFormat === 'hybrid' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    <Layers className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                    Chuẩn CV 7991
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-slate-900 mb-1">
+                  Trắc nghiệm + Tự luận
+                </h4>
+                <p className="text-xs text-slate-500 line-clamp-2">
+                  Kết hợp trắc nghiệm khách quan (Phần I, II, III) và tự luận (Phần IV) phân hóa năng lực.
+                </p>
+              </button>
+
+              {/* Card 2: Multiple Choice Only */}
+              <button
+                type="button"
+                onClick={() => handleSelectFormat('multiple_choice_only')}
+                className={`text-left p-4 rounded-xl border-2 transition-all cursor-pointer relative ${
+                  examFormat === 'multiple_choice_only'
+                    ? 'bg-blue-50/80 border-blue-500 shadow-xs ring-2 ring-blue-200/60'
+                    : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/60'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className={`p-2 rounded-lg ${examFormat === 'multiple_choice_only' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    <CheckSquare className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                    10,0đ Trắc nghiệm
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-slate-900 mb-1">
+                  100% Trắc nghiệm
+                </h4>
+                <p className="text-xs text-slate-500 line-clamp-2">
+                  Toàn bộ 10,0 điểm câu hỏi trắc nghiệm (Phần I, II, III). Không có câu tự luận.
+                </p>
+              </button>
+
+              {/* Card 3: Essay Only */}
+              <button
+                type="button"
+                onClick={() => handleSelectFormat('essay_only')}
+                className={`text-left p-4 rounded-xl border-2 transition-all cursor-pointer relative ${
+                  examFormat === 'essay_only'
+                    ? 'bg-purple-50/80 border-purple-500 shadow-xs ring-2 ring-purple-200/60'
+                    : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/60'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className={`p-2 rounded-lg ${examFormat === 'essay_only' ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    <PenTool className="w-4 h-4" />
+                  </div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                    10,0đ Tự luận
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-slate-900 mb-1">
+                  100% Tự luận
+                </h4>
+                <p className="text-xs text-slate-500 line-clamp-2">
+                  Toàn bộ 10,0 điểm câu hỏi tự luận có rubric chi tiết (Ngữ văn Đọc hiểu - Viết, bài toán tự luận...).
+                </p>
+              </button>
+            </div>
+
+            {/* Quick Ratio Selection for Hybrid */}
+            {examFormat === 'hybrid' && (
+              <div className="pt-3 border-t border-indigo-100/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="text-xs font-semibold text-slate-700 flex items-center space-x-1.5">
+                  <Percent className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Chọn nhanh tỷ lệ điểm Trắc nghiệm / Tự luận:</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { id: '70_30' as HybridRatioType, label: '70% TN (7đ) - 30% TL (3đ)', desc: 'Chuẩn THPT' },
+                    { id: '50_50' as HybridRatioType, label: '50% TN (5đ) - 50% TL (5đ)', desc: 'Chuẩn THCS' },
+                    { id: '60_40' as HybridRatioType, label: '60% TN (6đ) - 40% TL (4đ)', desc: 'Cân đối' },
+                    { id: '80_20' as HybridRatioType, label: '80% TN (8đ) - 20% TL (2đ)', desc: 'Đề nhanh' },
+                  ].map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => handleSelectFormat('hybrid', r.id)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        hybridRatio === r.id
+                          ? 'bg-indigo-600 text-white shadow-2xs'
+                          : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Subject Rule Highlights */}
           <div className="p-4 bg-indigo-50/70 border border-indigo-100 rounded-xl">
             <div className="flex items-center space-x-2 text-xs font-bold text-indigo-900 mb-2">
@@ -789,6 +1052,23 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
             </ul>
           </div>
 
+          {/* =========================================================================
+              TEXTBOOK VISION UPLOADER (Dán ảnh SGK / Chụp màn hình bằng AI Vision)
+              ========================================================================= */}
+          <TextbookScopeVisionUploader
+            subject={currentProfileData.name}
+            subjectId={selectedSubject}
+            grade={grade}
+            term={term}
+            selectedTopics={selectedTopics}
+            onTopicsUpdated={(newTopics) => setSelectedTopics(newTopics)}
+            onExtractionComplete={(result, contextText) => {
+              setTextbookResult(result);
+              setExtractedTextbookContext(contextText);
+            }}
+            onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
+          />
+
           {/* Topics and Knowledge Units */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -796,7 +1076,7 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
                 Phạm vi kiến thức / Chương / Chủ đề ({selectedTopics.length})
               </label>
               <span className="text-[11px] text-slate-400">
-                Tự động gợi ý theo Chương trình GDPT 2018
+                Tự động gợi ý theo Chương trình GDPT 2018 & Ảnh chụp SGK
               </span>
             </div>
 
@@ -835,6 +1115,35 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
                 Thêm chủ đề
               </button>
             </div>
+          </div>
+
+          {/* Live Auto-Generated Matrix & Specification Status Banner */}
+          <div className="p-4 bg-gradient-to-r from-indigo-50/80 to-purple-50/80 border border-indigo-100 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-indigo-600 text-white rounded-xl shadow-2xs">
+                <Table className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-indigo-950 flex items-center space-x-1.5">
+                  <span>Ma trận & Bản đặc tả đã được tự động sinh (CV 7991)</span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-emerald-700 font-semibold text-[11px]">Sẵn sàng trước khi sinh đề</span>
+                </div>
+                <p className="text-[11px] text-indigo-900/70 mt-0.5">
+                  Đã tự động liên kết {selectedTopics.length} chủ đề và {matrixCells.length} đơn vị kiến thức
+                  {textbookResult ? ` (bám sát bài SGK: "${textbookResult.detected_lesson_title}")` : ''}.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setCurrentStep('matrix')}
+              className="inline-flex items-center px-3 py-1.5 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-bold rounded-lg shadow-2xs transition-all cursor-pointer whitespace-nowrap self-start sm:self-auto"
+            >
+              <Eye className="w-3.5 h-3.5 mr-1.5 text-indigo-600" />
+              <span>Xem trước Ma trận & Đặc tả</span>
+            </button>
           </div>
 
           {/* Custom prompt instructions */}
@@ -906,6 +1215,149 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
                   <span>Tự động cân bằng 10,0 điểm</span>
                 </button>
               )}
+            </div>
+          </div>
+
+          {/* Format Switcher & Presets in Step 2 */}
+          <div className="p-4 bg-slate-50/80 border border-slate-200 rounded-2xl space-y-3.5">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex items-center space-x-2">
+                <Sliders className="w-4 h-4 text-indigo-600" />
+                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                  Hình thức đề thi:
+                </span>
+                <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold border ${formatInfo.badgeColor}`}>
+                  {formatInfo.label}
+                </span>
+              </div>
+
+              {/* Fast Format Segmented Switch */}
+              <div className="inline-flex bg-slate-200/80 p-1 rounded-xl gap-1">
+                <button
+                  type="button"
+                  onClick={() => handleSelectFormat('hybrid')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                    examFormat === 'hybrid'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>Trắc nghiệm + Tự luận</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectFormat('multiple_choice_only')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                    examFormat === 'multiple_choice_only'
+                      ? 'bg-white text-blue-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <CheckSquare className="w-3.5 h-3.5" />
+                  <span>100% Trắc nghiệm</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectFormat('essay_only')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                    examFormat === 'essay_only'
+                      ? 'bg-white text-purple-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <PenTool className="w-3.5 h-3.5" />
+                  <span>100% Tự luận</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Ratio pills if Hybrid */}
+            {examFormat === 'hybrid' && (
+              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-200/70">
+                <span className="text-xs text-slate-500 font-medium">Tỷ lệ Trắc nghiệm / Tự luận:</span>
+                {[
+                  { id: '70_30' as HybridRatioType, label: '70% TN (7,0đ) - 30% TL (3,0đ)' },
+                  { id: '50_50' as HybridRatioType, label: '50% TN (5,0đ) - 50% TL (5,0đ)' },
+                  { id: '60_40' as HybridRatioType, label: '60% TN (6,0đ) - 40% TL (4,0đ)' },
+                  { id: '80_20' as HybridRatioType, label: '80% TN (8,0đ) - 20% TL (2,0đ)' },
+                ].map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => handleSelectFormat('hybrid', r.id)}
+                    className={`px-2.5 py-1 text-xs rounded-lg font-semibold transition-all ${
+                      hybridRatio === r.id
+                        ? 'bg-indigo-600 text-white font-bold'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Presets List */}
+            {currentFormatPresets.length > 0 && (
+              <div className="pt-2 border-t border-slate-200/70 space-y-1.5">
+                <div className="flex items-center space-x-1 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  <ListChecks className="w-3.5 h-3.5 text-indigo-500" />
+                  <span>Gợi ý mẫu cấu trúc chuẩn (Nhấn để áp dụng ngay 10,0 điểm):</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {currentFormatPresets.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => handleApplyPreset(preset)}
+                      className="p-2.5 bg-white hover:bg-indigo-50/50 rounded-xl border border-slate-200 hover:border-indigo-300 transition-all text-left group flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1 mb-1">
+                          <span className="text-xs font-bold text-slate-800 group-hover:text-indigo-700">
+                            {preset.name}
+                          </span>
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-700 group-hover:bg-indigo-100 group-hover:text-indigo-800 whitespace-nowrap">
+                            {preset.badge}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 line-clamp-2">
+                          {preset.description}
+                        </p>
+                      </div>
+                      <div className="mt-2 pt-1 border-t border-slate-100 flex items-center justify-between text-[11px] text-indigo-600 font-semibold">
+                        <span>Áp dụng mẫu</span>
+                        <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Visual ratio bar */}
+            <div className="pt-2 border-t border-slate-200/70">
+              <div className="flex items-center justify-between text-xs text-slate-500 font-medium mb-1.5">
+                <div className="flex items-center space-x-2">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500" />
+                  <span>Trắc nghiệm: {formatInfo.mcPoints} điểm ({formatInfo.mcPercent}%)</span>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full bg-purple-500" />
+                  <span>Tự luận: {formatInfo.essayPoints} điểm ({formatInfo.essayPercent}%)</span>
+                </div>
+              </div>
+              <div className="h-2.5 w-full bg-slate-200 rounded-full overflow-hidden flex">
+                <div
+                  className="h-full bg-blue-500 transition-all duration-300"
+                  style={{ width: `${Math.min(100, Math.max(0, formatInfo.mcPercent))}%` }}
+                />
+                <div
+                  className="h-full bg-purple-500 transition-all duration-300"
+                  style={{ width: `${Math.min(100, Math.max(0, formatInfo.essayPercent))}%` }}
+                />
+              </div>
             </div>
           </div>
 
@@ -1750,16 +2202,41 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div>
-              <h2 className="text-lg font-bold text-slate-900">
-                Bước 3: Khung Ma Trận & Bản Đặc Tả Đề Kiểm Tra (CV 7991)
-              </h2>
-              <p className="text-xs text-slate-500">
-                Ma trận thể hiện mối liên kết chặt chẽ giữa Chủ đề × Mức độ nhận thức × Dạng câu hỏi × Điểm số.
+              <div className="flex items-center space-x-2">
+                <h2 className="text-lg font-bold text-slate-900">
+                  Bước 3: Khung Ma Trận & Bản Đặc Tả Đề Kiểm Tra (Tự Động Sinh - CV 7991)
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  Đã tự động sinh
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Ma trận và bảng đặc tả được tự động tính toán bám sát các chủ đề và nội dung SGK trước khi sinh đề thi.
               </p>
             </div>
 
-            <div className="text-xs font-semibold bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-lg">
-              {matrixCells.length} nội dung kiểm tra
+            <div className="flex items-center space-x-2">
+              <span className={`text-xs px-2.5 py-1 rounded-full font-bold border ${formatInfo.badgeColor}`}>
+                {formatInfo.label}
+              </span>
+              <div className="text-xs font-semibold bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-lg">
+                {matrixCells.length} nội dung kiểm tra
+              </div>
+            </div>
+          </div>
+
+          {/* Automatic Generation Informational Banner */}
+          <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-start space-x-3 text-xs text-emerald-900">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <span className="font-bold">
+                Ma trận và Bản đặc tả đã được tự động sinh hoàn chỉnh theo chuẩn CV 7991/BGDĐT-GDTrH:
+              </span>
+              <p className="text-emerald-800 text-[11px] leading-relaxed">
+                Hệ thống đã tự động liên kết {selectedTopics.length} chủ đề, phân bổ tỷ lệ các mức độ nhận thức (Nhận biết, Thông hiểu, Vận dụng) và định dạng câu hỏi
+                {textbookResult ? ` bám sát bài học nhận diện từ ảnh chụp SGK: "${textbookResult.detected_lesson_title}"` : ''}.
+                Thầy/Cô hãy rà soát kỹ bảng đặc tả dưới đây trước khi nhấn nút bắt đầu tạo đề.
+              </p>
             </div>
           </div>
 
@@ -1802,10 +2279,10 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
             <button
               id="btn-start-ai-generation"
               onClick={handleStartGeneration}
-              className="inline-flex items-center px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white text-xs font-bold rounded-xl shadow-md transition-all"
+              className="inline-flex items-center px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer"
             >
               <Sparkles className="w-4 h-4 mr-2 text-amber-300" />
-              <span>Tiến hành tạo đề thi bằng AI</span>
+              <span>Tiến hành tạo đề thi bám sát Ma trận & Bảng đặc tả này</span>
             </button>
           </div>
         </div>
@@ -2125,7 +2602,7 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
                     {generatedExamData.exam.title}
                   </h2>
                   <p className="text-xs text-slate-700 font-medium italic">
-                    Thời gian làm bài: {generatedExamData.exam.duration_minutes} phút (không kể thời gian phát đề)
+                    Thời gian làm bài: {generatedExamData.exam.duration_minutes} phút (không kể thời gian phát đề) • Hình thức: {formatInfo.label}
                   </p>
                 </div>
               </div>

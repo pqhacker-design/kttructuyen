@@ -94,6 +94,9 @@ export interface CognitiveDistributionConfig {
   advanced_application: number;
 }
 
+export type ExamFormatType = 'multiple_choice_only' | 'essay_only' | 'hybrid';
+export type HybridRatioType = '70_30' | '50_50' | '60_40' | '80_20' | 'custom';
+
 export interface ExamStructureConfig {
   totalScore: number; // Luôn là 10.0
   durationMinutes: number; // 45, 60, 90...
@@ -102,6 +105,8 @@ export interface ExamStructureConfig {
   allowAdvancedApplication: boolean;
   advancedApplicationCount: number;
   advancedApplicationPoints: number;
+  examFormat?: ExamFormatType;
+  hybridRatio?: HybridRatioType;
 }
 
 export interface SubjectProfile {
@@ -254,4 +259,26 @@ export interface AIExamGenerationResponse {
   model: string;
   prompt_version: string;
   regulation_reference: string;
+}
+
+export interface TextbookImage {
+  id: string;
+  dataUrl: string; // Preview URL: data:image/png;base64,...
+  mimeType: string;
+  base64Data: string; // Raw base64 data
+  fileName: string;
+  fileSize: number;
+}
+
+export interface TextbookExtractionResult {
+  detected_lesson_title: string;
+  suggested_topics: string[];
+  content_units: string[];
+  learning_outcomes: {
+    recognition: string;
+    comprehension: string;
+    application: string;
+  };
+  key_knowledge_summary: string;
+  suggested_question_focus: string;
 }

@@ -185,6 +185,7 @@ create table if not exists public.matrix_items (
   matrix_id uuid not null references public.matrices(id) on delete cascade,
   topic text not null,
   subtopic text,
+  learning_requirement text,
   cognitive_level text not null check (cognitive_level in ('recognition', 'comprehension', 'application', 'advanced_application')),
   question_type text not null check (question_type in ('single_choice', 'multiple_choice', 'true_false', 'short_answer', 'essay')),
   question_count integer not null default 1 check (question_count >= 0),
