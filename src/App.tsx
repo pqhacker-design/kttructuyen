@@ -29,9 +29,32 @@ import { getCurrentProfile, onAuthStateChange, isSupabaseConfigured, signOut } f
 import { JoinExamResponse, joinExamWithAccessCode } from './services/takingService';
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
-  const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
-  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [currentTab, setCurrentTab] = useState<NavTab>(() => {
+    try {
+      const saved = localStorage.getItem('eduexam_active_tab') as NavTab;
+      if (saved) return saved;
+    } catch {}
+    return 'dashboard';
+  });
+
+  const [currentProfile, setCurrentProfile] = useState<Profile | null>(() => {
+    try {
+      const saved = localStorage.getItem('eduexam_active_user');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return null;
+  });
+
+  // Only show blocking loading screen if no cached profile is present on first load
+  const [loadingAuth, setLoadingAuth] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('eduexam_active_user');
+      return !saved;
+    } catch {}
+    return true;
+  });
+
+  const isInitialAuthCheck = React.useRef(true);
 
   // Modals state
   const [isAuthOpen, setIsAuthOpen] = useState(false);
@@ -39,6 +62,13 @@ export default function App() {
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState('');
+
+  // Persist active tab to prevent losing current location on browser reload or tab change
+  useEffect(() => {
+    try {
+      localStorage.setItem('eduexam_active_tab', currentTab);
+    } catch {}
+  }, [currentTab]);
 
   // Sidebar collapse & mobile state
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
@@ -67,13 +97,14 @@ export default function App() {
 
   useEffect(() => {
     // Initial profile fetch
-    checkAuth();
+    checkAuth(true);
 
-    // Listen to Supabase auth events
+    // Listen to Supabase auth events (e.g. token refresh when switching tabs or regaining focus)
     const { data: authListener } = onAuthStateChange((event, session) => {
       if (session?.user) {
-        checkAuth();
-      } else {
+        // Run background verification without showing blocking full-screen loader
+        checkAuth(false);
+      } else if (event === 'SIGNED_OUT') {
         setCurrentProfile(null);
         setIsAuthOpen(true);
       }
@@ -96,19 +127,27 @@ export default function App() {
     }
   }, []);
 
-  const checkAuth = async () => {
-    setLoadingAuth(true);
+  const checkAuth = async (isInitial = false) => {
+    // Only show full-screen blocking loader on the very first mount if no cached profile exists
+    if (isInitial && !currentProfile) {
+      setLoadingAuth(true);
+    }
     try {
       const profile = await getCurrentProfile();
       setCurrentProfile(profile);
-      if (!profile) {
+      if (!profile && isInitial) {
         setIsAuthOpen(true);
       }
     } catch (err) {
       console.error('Error fetching auth state:', err);
-      setIsAuthOpen(true);
+      if (isInitial && !currentProfile) {
+        setIsAuthOpen(true);
+      }
     } finally {
-      setLoadingAuth(false);
+      isInitialAuthCheck.current = false;
+      if (isInitial) {
+        setLoadingAuth(false);
+      }
     }
   };
 

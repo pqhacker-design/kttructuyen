@@ -43,16 +43,54 @@ export const TextbookScopeVisionUploader: React.FC<TextbookScopeVisionUploaderPr
   onExtractionComplete,
   onOpenApiKeyModal,
 }) => {
-  const [images, setImages] = useState<TextbookImage[]>([]);
+  const [images, setImages] = useState<TextbookImage[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('eduexam_tb_images_draft');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
   const [isDragging, setIsDragging] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [extractedResult, setExtractedResult] = useState<TextbookExtractionResult | null>(null);
+  const [extractedResult, setExtractedResult] = useState<TextbookExtractionResult | null>(() => {
+    try {
+      const saved = sessionStorage.getItem('eduexam_tb_extracted_result');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return null;
+  });
   const [previewModalImage, setPreviewModalImage] = useState<string | null>(null);
   const [clipboardFeedback, setClipboardFeedback] = useState<string | null>(null);
   const [isAppliedToTopics, setIsAppliedToTopics] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+
+  // Auto-persist images to sessionStorage to avoid losing uploads during tab switches or refresh
+  useEffect(() => {
+    try {
+      if (images.length > 0) {
+        sessionStorage.setItem('eduexam_tb_images_draft', JSON.stringify(images));
+      } else {
+        sessionStorage.removeItem('eduexam_tb_images_draft');
+      }
+    } catch (e) {
+      console.warn('Could not cache images in sessionStorage:', e);
+    }
+  }, [images]);
+
+  // Auto-persist extraction result to sessionStorage
+  useEffect(() => {
+    try {
+      if (extractedResult) {
+        sessionStorage.setItem('eduexam_tb_extracted_result', JSON.stringify(extractedResult));
+      } else {
+        sessionStorage.removeItem('eduexam_tb_extracted_result');
+      }
+    } catch (e) {
+      console.warn('Could not cache extraction result in sessionStorage:', e);
+    }
+  }, [extractedResult]);
 
   // Helper to convert File to base64 TextbookImage
   const processFile = (file: File): Promise<TextbookImage> => {
@@ -167,6 +205,10 @@ export const TextbookScopeVisionUploader: React.FC<TextbookScopeVisionUploaderPr
     setExtractedResult(null);
     setAnalysisError(null);
     setIsAppliedToTopics(false);
+    try {
+      sessionStorage.removeItem('eduexam_tb_images_draft');
+      sessionStorage.removeItem('eduexam_tb_extracted_result');
+    } catch {}
   };
 
   // Analyze Images with Gemini Vision

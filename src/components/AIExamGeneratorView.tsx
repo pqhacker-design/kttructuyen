@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Sparkles, 
   BookOpen, 
@@ -35,7 +35,8 @@ import {
   Camera,
   Image as ImageIcon,
   Eye,
-  Table
+  Table,
+  RotateCcw
 } from 'lucide-react';
 import { 
   SubjectCode, 
@@ -81,41 +82,82 @@ interface AIExamGeneratorViewProps {
 
 type WizardStep = 'config' | 'structure' | 'matrix' | 'generating' | 'preview';
 
+const AI_EXAM_DRAFT_KEY = 'eduexam_ai_exam_draft_v2';
+
+interface AIDraftData {
+  currentStep?: WizardStep;
+  selectedSubject?: SubjectCode;
+  grade?: number;
+  term?: string;
+  durationMinutes?: number;
+  customPrompt?: string;
+  selectedTopics?: string[];
+  structure?: ExamStructureConfig;
+  examFormat?: ExamFormatType;
+  hybridRatio?: HybridRatioType;
+  textbookResult?: TextbookExtractionResult | null;
+  extractedTextbookContext?: string;
+  generatedExamData?: AIExamGenerationResponse | null;
+}
+
+const loadAIDraft = (): AIDraftData | null => {
+  try {
+    const raw = sessionStorage.getItem(AI_EXAM_DRAFT_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.warn('Lỗi đọc draft đề thi:', e);
+  }
+  return null;
+};
+
 export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
   currentProfile,
   onNavigateToSessions,
   onOpenAuth,
   onNavigateToTab,
 }) => {
-  const [currentStep, setCurrentStep] = useState<WizardStep>('config');
+  const initialDraft = React.useMemo(() => loadAIDraft(), []);
+
+  const [currentStep, setCurrentStep] = useState<WizardStep>(() => initialDraft?.currentStep || 'config');
   const [isRegulationModalOpen, setIsRegulationModalOpen] = useState(false);
 
   // Step 1: Pedagogical Configuration
-  const [selectedSubject, setSelectedSubject] = useState<SubjectCode>('toan');
-  const [grade, setGrade] = useState<number>(10);
-  const [term, setTerm] = useState<string>('Cuối kì I');
-  const [durationMinutes, setDurationMinutes] = useState<number>(90);
-  const [customPrompt, setCustomPrompt] = useState<string>('');
-  const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  const [selectedSubject, setSelectedSubject] = useState<SubjectCode>(() => initialDraft?.selectedSubject || 'toan');
+  const [grade, setGrade] = useState<number>(() => initialDraft?.grade ?? 10);
+  const [term, setTerm] = useState<string>(() => initialDraft?.term || 'Cuối kì I');
+  const [durationMinutes, setDurationMinutes] = useState<number>(() => initialDraft?.durationMinutes ?? 90);
+  const [customPrompt, setCustomPrompt] = useState<string>(() => initialDraft?.customPrompt || '');
+  const [selectedTopics, setSelectedTopics] = useState<string[]>(() => {
+    if (initialDraft?.selectedTopics && initialDraft.selectedTopics.length > 0) {
+      return initialDraft.selectedTopics;
+    }
+    const defaultCurriculum = SubjectRuleEngine.getCurriculumTopics('toan', 10);
+    return defaultCurriculum.map((c) => c.topic);
+  });
   const [newTopicInput, setNewTopicInput] = useState<string>('');
 
   // Active Legal Regulation
   const [activeRegulation, setActiveRegulation] = useState<LegalRegulation>(() =>
-    regulationService.getPrimaryReference('toan', 'THPT')
+    regulationService.getPrimaryReference(
+      initialDraft?.selectedSubject || 'toan',
+      (initialDraft?.grade ?? 10) <= 9 ? 'THCS' : 'THPT'
+    )
   );
 
   // Step 2: Exam Structure Configuration
   const [structure, setStructure] = useState<ExamStructureConfig>(() => {
-    const p = SubjectRuleEngine.getProfile('toan');
+    if (initialDraft?.structure) return initialDraft.structure;
+    const p = SubjectRuleEngine.getProfile(initialDraft?.selectedSubject || 'toan');
     return JSON.parse(JSON.stringify(p.default_structure));
   });
 
   // Exam format states: 'multiple_choice_only' | 'essay_only' | 'hybrid'
   const [examFormat, setExamFormat] = useState<ExamFormatType>(() => {
-    const p = SubjectRuleEngine.getProfile('toan');
+    if (initialDraft?.examFormat) return initialDraft.examFormat;
+    const p = SubjectRuleEngine.getProfile(initialDraft?.selectedSubject || 'toan');
     return detectExamFormat(p.default_structure);
   });
-  const [hybridRatio, setHybridRatio] = useState<HybridRatioType>('70_30');
+  const [hybridRatio, setHybridRatio] = useState<HybridRatioType>(() => initialDraft?.hybridRatio || '70_30');
 
   const formatInfo = React.useMemo(() => {
     return getExamFormatInfo({
@@ -153,13 +195,13 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
   const [matrixCells, setMatrixCells] = useState<MatrixCellSpecification[]>([]);
 
   // Textbook OCR / Vision Extraction State
-  const [textbookResult, setTextbookResult] = useState<TextbookExtractionResult | null>(null);
-  const [extractedTextbookContext, setExtractedTextbookContext] = useState<string>('');
+  const [textbookResult, setTextbookResult] = useState<TextbookExtractionResult | null>(() => initialDraft?.textbookResult ?? null);
+  const [extractedTextbookContext, setExtractedTextbookContext] = useState<string>(() => initialDraft?.extractedTextbookContext || '');
 
   // Step 4 & 5: Generated Exam & Results
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState<string>('');
-  const [generatedExamData, setGeneratedExamData] = useState<AIExamGenerationResponse | null>(null);
+  const [generatedExamData, setGeneratedExamData] = useState<AIExamGenerationResponse | null>(() => initialDraft?.generatedExamData ?? null);
   const [previewTab, setPreviewTab] = useState<'exam' | 'answers' | 'matrix'>('exam');
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [regeneratingQuestionId, setRegeneratingQuestionId] = useState<string | null>(null);
@@ -178,8 +220,23 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
     return () => window.removeEventListener('edu_api_key_changed', handleKeyChange);
   }, []);
 
-  // When subject or grade changes, update profile and default topics
+  // Track subject & grade to avoid overwriting restored draft topics on initial render
+  const prevSubjectGradeRef = useRef<{ subject: SubjectCode; grade: number }>({
+    subject: initialDraft?.selectedSubject || 'toan',
+    grade: initialDraft?.grade ?? 10,
+  });
+
+  // When subject or grade changes BY TEACHER INTERACTION, update profile and default topics
   useEffect(() => {
+    if (
+      prevSubjectGradeRef.current.subject === selectedSubject &&
+      prevSubjectGradeRef.current.grade === grade
+    ) {
+      // First mount or unchanged: do not overwrite draft topics / structure!
+      return;
+    }
+    prevSubjectGradeRef.current = { subject: selectedSubject, grade };
+
     const profile = SubjectRuleEngine.getProfile(selectedSubject);
     const detected = detectExamFormat(profile.default_structure);
     setExamFormat(detected);
@@ -193,6 +250,71 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
     const reg = regulationService.getPrimaryReference(selectedSubject, grade <= 9 ? 'THCS' : 'THPT');
     setActiveRegulation(reg);
   }, [selectedSubject, grade]);
+
+  // Auto-save draft to sessionStorage to protect work when switching tabs or taking screenshots
+  useEffect(() => {
+    try {
+      const draft: AIDraftData = {
+        currentStep,
+        selectedSubject,
+        grade,
+        term,
+        durationMinutes,
+        customPrompt,
+        selectedTopics,
+        structure,
+        examFormat,
+        hybridRatio,
+        textbookResult,
+        extractedTextbookContext,
+        generatedExamData,
+      };
+      sessionStorage.setItem(AI_EXAM_DRAFT_KEY, JSON.stringify(draft));
+    } catch (e) {
+      // ignore storage quota errors
+    }
+  }, [
+    currentStep,
+    selectedSubject,
+    grade,
+    term,
+    durationMinutes,
+    customPrompt,
+    selectedTopics,
+    structure,
+    examFormat,
+    hybridRatio,
+    textbookResult,
+    extractedTextbookContext,
+    generatedExamData,
+  ]);
+
+  // Handler to reset and start a fresh exam draft
+  const handleResetDraft = () => {
+    if (window.confirm('Thầy/Cô có chắc chắn muốn xóa bản nháp đang tạo và thiết lập lại từ đầu không?')) {
+      try {
+        sessionStorage.removeItem(AI_EXAM_DRAFT_KEY);
+        sessionStorage.removeItem('eduexam_tb_images_draft');
+        sessionStorage.removeItem('eduexam_tb_extracted_result');
+      } catch {}
+
+      setCurrentStep('config');
+      setSelectedSubject('toan');
+      setGrade(10);
+      setTerm('Cuối kì I');
+      setDurationMinutes(90);
+      setCustomPrompt('');
+      const defaultTopics = SubjectRuleEngine.getCurriculumTopics('toan', 10).map((c) => c.topic);
+      setSelectedTopics(defaultTopics);
+      const prof = SubjectRuleEngine.getProfile('toan');
+      setStructure(JSON.parse(JSON.stringify(prof.default_structure)));
+      setExamFormat(detectExamFormat(prof.default_structure));
+      setHybridRatio('70_30');
+      setTextbookResult(null);
+      setExtractedTextbookContext('');
+      setGeneratedExamData(null);
+    }
+  };
 
   // When topics, structure, or textbook result change, automatically recalculate matrix & specs
   useEffect(() => {
@@ -710,8 +832,17 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
 
           <div className="flex flex-wrap items-center gap-2">
             <button
+              onClick={handleResetDraft}
+              className="inline-flex items-center px-3 py-2 rounded-xl bg-white/10 hover:bg-rose-500/30 hover:border-rose-400/50 border border-white/20 text-xs font-semibold text-white backdrop-blur-xs transition-all shadow-xs cursor-pointer"
+              title="Xóa bản nháp đang soạn và tạo lại từ đầu"
+            >
+              <RotateCcw className="w-4 h-4 mr-1.5 text-rose-300" />
+              <span>Tạo đề mới</span>
+            </button>
+
+            <button
               onClick={() => setIsRegulationModalOpen(true)}
-              className="inline-flex items-center px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-semibold text-white backdrop-blur-xs transition-all shadow-xs"
+              className="inline-flex items-center px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-semibold text-white backdrop-blur-xs transition-all shadow-xs cursor-pointer"
             >
               <BookOpen className="w-4 h-4 mr-2 text-indigo-200" />
               <span>Căn cứ: {activeRegulation.document_number}</span>
