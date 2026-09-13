@@ -44,6 +44,7 @@ export interface GenerateExamParams {
   sourceQuestionBankId?: string;
   extractedTextbookContext?: string;
   textbookResult?: TextbookExtractionResult;
+  onProgress?: (message: string) => void;
 }
 
 class AIExamService {

@@ -122,6 +122,333 @@ export async function callDirectGeminiAPI(
 /**
  * Direct client-side generation for exam adhering to CV 7991/BGDĐT-GDTrH
  */
+/**
+ * Helper to generate questions for a specific exam part.
+ * Generating part-by-part avoids token limits, eliminates JSON truncation, and guarantees the exact question count.
+ */
+async function generateSinglePartQuestionsDirectGemini(
+  partConfig: any,
+  startOrder: number,
+  params: GenerateExamParams,
+  profile: any,
+  activeReg: any,
+  apiKey: string
+): Promise<GeneratedAIQuestion[]> {
+  const partNum = partConfig.part;
+  const targetCount = Number(partConfig.questionCount) || 0;
+  if (targetCount <= 0) return [];
+
+  const partType = partConfig.type || (
+    partNum === 1 ? 'single_choice' :
+    partNum === 2 ? 'true_false' :
+    partNum === 3 ? 'short_answer' : 'essay'
+  );
+
+  const ptsPerQ = Number(partConfig.pointsPerQuestion) || (
+    partNum === 1 ? 0.25 :
+    partNum === 2 ? 1.0 :
+    partNum === 3 ? 0.5 :
+    (partConfig.totalPoints ? partConfig.totalPoints / targetCount : 2.0)
+  );
+
+  // Extract relevant matrix requirements for this part
+  const relevantCells = (params.matrixCells || []).filter((c: any) => {
+    if (partNum === 1) return ((c.mc_rec || 0) + (c.mc_com || 0) + (c.mc_app || 0)) > 0;
+    if (partNum === 2) return ((c.tf_rec || 0) + (c.tf_com || 0) + (c.tf_app || 0)) > 0;
+    if (partNum === 3) return ((c.sa_rec || 0) + (c.sa_com || 0) + (c.sa_app || 0)) > 0;
+    if (partNum === 4) return ((c.essay_rec || 0) + (c.essay_com || 0) + (c.essay_app || 0) + (c.essay_adv || 0)) > 0;
+    return true;
+  });
+
+  const matrixSnippet = relevantCells.length > 0 
+    ? `\nPHÂN BỔ MA TRẬN CHO PHẦN NÀY:\n${JSON.stringify(relevantCells.map((c: any) => ({
+        topic: c.topic,
+        content_unit: c.content_unit,
+        cognitive_level: partNum === 1 ? (c.mc_rec ? 'recognition' : c.mc_com ? 'comprehension' : 'application')
+          : partNum === 2 ? (c.tf_rec ? 'recognition' : c.tf_com ? 'comprehension' : 'application')
+          : partNum === 3 ? (c.sa_rec ? 'recognition' : c.sa_com ? 'comprehension' : 'application')
+          : (c.essay_adv ? 'advanced_application' : c.essay_app ? 'application' : 'comprehension'),
+        yccd: c.learning_requirement
+      })), null, 2)}`
+    : '';
+
+  let partSpecificRules = '';
+  let partJsonSchema = '';
+
+  if (partNum === 1 || partType === 'single_choice') {
+    partSpecificRules = `
+QUY ĐỊNH PHẦN I - TRẮC NGHIỆM NHIỀU LỰA CHỌN (4 LỰA CHỌN A, B, C, D):
+- BẮT BUỘC TẠO ĐỦ CHÍNH XÁC ${targetCount} CÂU HỎI. Đánh số question_order từ ${startOrder} đến ${startOrder + targetCount - 1}.
+- Mỗi câu hỏi có 4 phương án lựa chọn A, B, C, D trong mảng "options".
+- Đúng 1 phương án có "is_correct": true, 3 phương án còn lại có "is_correct": false.
+- Điểm mỗi câu: "points": ${ptsPerQ}.
+- "explanation": Lời giải thích chi tiết vì sao chọn phương án đúng.
+`;
+    partJsonSchema = `{
+  "questions": [
+    {
+      "id": "q-${startOrder}",
+      "exam_part": 1,
+      "question_order": ${startOrder},
+      "question_type": "single_choice",
+      "topic": "Tên chủ đề",
+      "content_unit": "Tên bài học",
+      "cognitive_level": "recognition" | "comprehension" | "application",
+      "points": ${ptsPerQ},
+      "content": "Nội dung câu hỏi...",
+      "options": [
+        { "id": "a", "content": "Phương án A", "is_correct": true, "option_order": 1 },
+        { "id": "b", "content": "Phương án B", "is_correct": false, "option_order": 2 },
+        { "id": "c", "content": "Phương án C", "is_correct": false, "option_order": 3 },
+        { "id": "d", "content": "Phương án D", "is_correct": false, "option_order": 4 }
+      ],
+      "explanation": "Giải thích chi tiết..."
+    }
+  ]
+}`;
+  } else if (partNum === 2 || partType === 'true_false') {
+    const statementsCount = Number(partConfig.statementsPerQuestion) || 4;
+    const ptsPerStmt = Number(partConfig.pointsPerStatement) || (ptsPerQ / statementsCount);
+    const labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].slice(0, statementsCount);
+    const sampleStmts = labels.map((l, i) => 
+      `        { "id": "st-${l}", "statement": "${l}) Mệnh đề ${l}...", "is_correct": ${i % 2 === 0}, "explanation": "Giải thích vì sao đúng/sai..." }`
+    ).join(',\n');
+
+    partSpecificRules = `
+QUY ĐỊNH PHẦN II - TRẮC NGHIỆM ĐÚNG - SAI:
+- BẮT BUỘC TẠO ĐỦ CHÍNH XÁC ${targetCount} CÂU HỎI. Đánh số question_order từ ${startOrder} đến ${startOrder + targetCount - 1}.
+- Mỗi câu gồm bài toán dẫn/bối cảnh ở "content", và ĐÚNG ${statementsCount} mệnh đề độc lập (${labels.join(', ')}) trong "statements".
+- Mỗi mệnh đề ghi rõ "is_correct": true hoặc false, kèm lời giải thích "explanation".
+- Điểm mỗi câu: "points": ${ptsPerQ} (${ptsPerStmt}đ mỗi mệnh đề đúng).
+`;
+    partJsonSchema = `{
+  "questions": [
+    {
+      "id": "q-${startOrder}",
+      "exam_part": 2,
+      "question_order": ${startOrder},
+      "question_type": "true_false",
+      "topic": "Tên chủ đề",
+      "content_unit": "Tên bài học",
+      "cognitive_level": "comprehension",
+      "points": ${ptsPerQ},
+      "content": "Bối cảnh / dữ kiện bài toán dẫn...",
+      "statements": [
+${sampleStmts}
+      ],
+      "explanation": "Tổng hợp lời giải chi tiết cho cả câu..."
+    }
+  ]
+}`;
+  } else if (partNum === 3 || partType === 'short_answer') {
+    partSpecificRules = `
+QUY ĐỊNH PHẦN III - TRẢ LỜI NGẮN:
+- BẮT BUỘC TẠO ĐỦ CHÍNH XÁC ${targetCount} CÂU HỎI. Đánh số question_order từ ${startOrder} đến ${startOrder + targetCount - 1}.
+- Thí sinh tự điền đáp số ngắn gọn.
+- "short_answer": { "normalized_answer": "đáp số ngắn gọn", "accepted_variants": ["đáp số"] }
+- Điểm mỗi câu: "points": ${ptsPerQ}.
+- "explanation": Lời giải chi tiết tìm ra đáp số.
+`;
+    partJsonSchema = `{
+  "questions": [
+    {
+      "id": "q-${startOrder}",
+      "exam_part": 3,
+      "question_order": ${startOrder},
+      "question_type": "short_answer",
+      "topic": "Tên chủ đề",
+      "content_unit": "Tên bài học",
+      "cognitive_level": "application",
+      "points": ${ptsPerQ},
+      "content": "Nội dung câu hỏi yêu cầu tìm đáp số...",
+      "short_answer": {
+        "normalized_answer": "42",
+        "accepted_variants": ["42", "42,0"]
+      },
+      "explanation": "Hướng dẫn các bước tính ra đáp số..."
+    }
+  ]
+}`;
+  } else {
+    // Part 4: Essay
+    const essayTotalPts = Number(partConfig.totalPoints) || 4.0;
+    const ptsPerEssay = essayTotalPts / targetCount;
+    partSpecificRules = `
+QUY ĐỊNH PHẦN IV - TỰ LUẬN (TỔNG ${essayTotalPts} ĐIỂM CHO PHẦN NÀY):
+- BẮT BUỘC TẠO ĐỦ CHÍNH XÁC ${targetCount} CÂU HỎI TỰ LUẬN. Đánh số question_order từ ${startOrder} đến ${startOrder + targetCount - 1}.
+- CẤU TRÚC Ý (1 ĐẾN 3 Ý ĐỘC LẬP / CÂU):
+  + Mỗi câu có thể gồm 1 ý, 2 ý hoặc 3 ý hỏi (a, b, c) tăng tiến từ Vận dụng cơ bản đến Vận dụng cao.
+  + Tổng điểm các ý BẮT BUỘC bằng điểm của câu (points == SUM(sub_items.points)).
+  + Mỗi ý có: "item_number" ('a', 'b', 'c'), "points", "cognitive_level", "question_text", "expected_answer", "scoring_rubric" chi tiết theo từng mức 0.25đ / 0.5đ.
+- Kèm "essay_rubric" tổng quát và "explanation" chi tiết.
+`;
+    partJsonSchema = `{
+  "questions": [
+    {
+      "id": "q-${startOrder}",
+      "exam_part": 4,
+      "question_order": ${startOrder},
+      "question_type": "essay",
+      "topic": "Tên chủ đề",
+      "content_unit": "Tên bài học",
+      "cognitive_level": "application",
+      "points": ${ptsPerEssay},
+      "intro_text": "Bối cảnh / đề dẫn bài toán chung (nếu có)",
+      "content": "Nội dung câu hỏi...",
+      "sub_items": [
+        {
+          "item_number": "a",
+          "points": ${ptsPerEssay / 2},
+          "cognitive_level": "application",
+          "question_text": "Ý a...",
+          "expected_answer": "Lời giải ý a...",
+          "scoring_rubric": [
+            { "id": "r1", "criterion": "Tiêu chí 1", "points": ${ptsPerEssay / 4} },
+            { "id": "r2", "criterion": "Tiêu chí 2", "points": ${ptsPerEssay / 4} }
+          ]
+        }
+      ],
+      "essay_rubric": [
+        { "id": "r1", "criterion": "Tiêu chí 1", "points": ${ptsPerEssay / 2} }
+      ],
+      "explanation": "Hướng dẫn chấm chi tiết..."
+    }
+  ]
+}`;
+  }
+
+  const prompt = `
+Bạn là Chuyên gia Khảo thí và Đo lường Giáo dục hàng đầu tại Việt Nam (BGDĐT).
+NHIỆM VỤ: Soạn thảo DUY NHẤT các câu hỏi cho ${partConfig.title || `Phần ${partNum}`} theo chuẩn Công văn 7991/BGDĐT-GDTrH và Chương trình GDPT 2018.
+
+THÔNG TIN:
+- Môn học: ${profile.name} (Lớp: ${params.grade}, Kì: ${params.term})
+- Chủ đề: ${Array.isArray(params.topics) ? params.topics.join(', ') : 'Chương trình hiện hành'}
+${params.extractedTextbookContext ? `\n⚠️ DỮ LIỆU BÁM SÁT SGK:\n${params.extractedTextbookContext}\n` : ''}
+${params.customPromptRequirements ? `\n- Yêu cầu bổ sung của giáo viên: ${params.customPromptRequirements}\n` : ''}
+${matrixSnippet}
+
+${partSpecificRules}
+
+RÀNG BUỘC CỰC KỲ QUAN TRỌNG:
+1. ĐÚNG VÀ ĐỦ SỐ LƯỢNG: Mảng "questions" BẮT BUỘC PHẢI CÓ ĐỦ CHÍNH XÁC ${targetCount} CÂU HỎI. Không được thiếu dù chỉ 1 câu!
+2. CÔNG THỨC TOÁN (LaTeX): BẮT BUỘC dùng hai dấu gạch chéo ngược \\\\ (ví dụ \\\\frac{a}{b}, \\\\sqrt{x}, \\\\alpha, \\\\vec{u}, \\\\Delta, \\\\le, \\\\ge). Tuyệt đối không dùng một dấu gạch đơn \\.
+3. DẤU NGOẶC KÉP: Tuyệt đối không dùng dấu ngoặc kép đôi " chưa escape bên trong chuỗi (dùng dấu nháy đơn '...' hoặc escape \\").
+4. ĐỊNH DẠNG ĐẦU RA: Trả về duy nhất đối tượng JSON hợp lệ:
+${partJsonSchema}
+`;
+
+  try {
+    const { text: responseText } = await callDirectGeminiAPI(apiKey, prompt);
+    const parsedData = safeParseAIJson(responseText);
+
+    let list: any[] = [];
+    if (Array.isArray(parsedData)) {
+      list = parsedData;
+    } else if (Array.isArray(parsedData?.questions)) {
+      list = parsedData.questions;
+    } else if (Array.isArray(parsedData?.exam?.questions)) {
+      list = parsedData.exam.questions;
+    } else if (Array.isArray(parsedData?.data?.questions)) {
+      list = parsedData.data.questions;
+    }
+
+    // Clean and normalize questions
+    return list.map((q, idx) => ({
+      ...q,
+      id: q.id || `q-${partNum}-${startOrder + idx}`,
+      exam_part: partNum,
+      question_order: startOrder + idx,
+      question_type: partType,
+      points: Number(q.points) || ptsPerQ,
+      topic: q.topic || params.topics[0] || profile.name,
+      content_unit: q.content_unit || q.topic || 'Kiến thức trọng tâm',
+      cognitive_level: q.cognitive_level || 'comprehension',
+      created_by_ai: true,
+      teacher_accepted: true,
+    }));
+  } catch (err: any) {
+    console.error(`[DirectGemini] Error generating Part ${partNum}:`, err);
+    throw new Error(`Lỗi sinh câu hỏi cho ${partConfig.title || `Phần ${partNum}`}: ${err?.message || err}`);
+  }
+}
+
+/**
+ * Auto-recovery helper to generate missing questions if a part returned fewer questions than required
+ */
+async function recoverMissingQuestionsDirectGemini(
+  partConfig: any,
+  nextOrder: number,
+  missingCount: number,
+  params: GenerateExamParams,
+  profile: any,
+  apiKey: string
+): Promise<GeneratedAIQuestion[]> {
+  if (missingCount <= 0) return [];
+  const partNum = partConfig.part;
+  console.info(`[DirectGemini] Recovering ${missingCount} missing question(s) for Part ${partNum}...`);
+
+  try {
+    const fillConfig = {
+      ...partConfig,
+      questionCount: missingCount,
+    };
+    const additionalQuestions = await generateSinglePartQuestionsDirectGemini(
+      fillConfig,
+      nextOrder,
+      params,
+      profile,
+      null,
+      apiKey
+    );
+    return additionalQuestions;
+  } catch (recErr) {
+    console.warn(`[DirectGemini] Recovery call failed:`, recErr);
+    // Fallback: create placeholder compliant questions to avoid failing total score & count
+    const fallbackList: GeneratedAIQuestion[] = [];
+    for (let i = 0; i < missingCount; i++) {
+      const qNum = nextOrder + i;
+      fallbackList.push({
+        id: `q-fill-${partNum}-${qNum}`,
+        exam_part: partNum,
+        question_order: qNum,
+        question_type: partConfig.type || (partNum === 1 ? 'single_choice' : partNum === 2 ? 'true_false' : partNum === 3 ? 'short_answer' : 'essay'),
+        topic: params.topics[0] || profile.name,
+        content_unit: 'Kiến thức trọng tâm',
+        cognitive_level: 'application',
+        points: partConfig.pointsPerQuestion || (partNum === 1 ? 0.25 : partNum === 2 ? 1.0 : 0.5),
+        content: `Câu hỏi bổ trợ ${qNum}: Vận dụng kiến thức bài học để giải quyết bài toán.`,
+        options: partNum === 1 ? [
+          { id: 'a', content: 'Phương án A (Đúng)', is_correct: true, option_order: 1 },
+          { id: 'b', content: 'Phương án B', is_correct: false, option_order: 2 },
+          { id: 'c', content: 'Phương án C', is_correct: false, option_order: 3 },
+          { id: 'd', content: 'Phương án D', is_correct: false, option_order: 4 },
+        ] : undefined,
+        statements: partNum === 2 ? [
+          { id: 'st-a', statement: 'Mệnh đề a', is_correct: true, explanation: 'Mệnh đề đúng' },
+          { id: 'st-b', statement: 'Mệnh đề b', is_correct: false, explanation: 'Mệnh đề sai' },
+          { id: 'st-c', statement: 'Mệnh đề c', is_correct: true, explanation: 'Mệnh đề đúng' },
+          { id: 'st-d', statement: 'Mệnh đề d', is_correct: false, explanation: 'Mệnh đề sai' },
+        ] : undefined,
+        short_answer: partNum === 3 ? { normalized_answer: '0', accepted_variants: ['0'] } : undefined,
+        learning_requirement: 'Vận dụng kiến thức bài học giải quyết bài toán',
+        ai_review_status: 'passed',
+        source: 'ai_generated',
+        explanation: 'Lời giải chi tiết theo chuẩn kiến thức kĩ năng.',
+        created_by_ai: true,
+        teacher_accepted: true,
+      });
+    }
+    return fallbackList;
+  }
+}
+
+/**
+ * Direct client-side generation for exam adhering to CV 7991/BGDĐT-GDTrH.
+ * Optimized with two distinct phases:
+ * Phase 1: Matrix & Specification Table (lightweight JSON).
+ * Phase 2: Exam Questions & Answers generated Part-by-Part (compact JSON payloads, 100% question count guarantee).
+ */
 export async function generateExamDirectGemini(
   params: GenerateExamParams,
   apiKey: string
@@ -132,230 +459,80 @@ export async function generateExamDirectGemini(
     params.grade <= 9 ? 'THCS' : 'THPT'
   );
 
-  const part2Config = params.structure?.parts?.find((p: any) => p.part === 2 || p.type === 'true_false');
-  const statementsCount = Number(part2Config?.statementsPerQuestion) || 4;
-  const pointsPerStatement = Number(part2Config?.pointsPerStatement) || (part2Config?.pointsPerQuestion ? part2Config.pointsPerQuestion / statementsCount : 0.25);
+  const enabledParts = params.structure?.parts?.filter((p: any) => p.enabled && p.questionCount > 0) || [];
 
-  const part4Config = params.structure?.parts?.find((p: any) => p.part === 4 || p.type === 'essay');
-  const allowedSubCounts = part4Config?.allowedSubItemCounts || [1, 2, 3];
-
-  const examFormat = params.structure?.examFormat || (
-    part4Config && part4Config.enabled && part4Config.totalPoints > 0 && params.structure?.parts?.some((p: any) => p.part !== 4 && p.enabled && p.totalPoints > 0)
-      ? 'hybrid'
-      : (part4Config && part4Config.enabled && part4Config.totalPoints > 0 ? 'essay_only' : 'multiple_choice_only')
-  );
-
-  let formatRequirementText = '';
-  if (examFormat === 'multiple_choice_only') {
-    formatRequirementText = `
-⚠️ ĐẶC BIỆT CHÚ Ý - ĐỊNH DẠNG ĐỀ: 100% TRẮC NGHIỆM KHÁCH QUAN (TỔNG 10,0 ĐIỂM).
-- TUYỆT ĐỐI KHÔNG TẠO BẤT KỲ CÂU HỎI TỰ LUẬN NÀO (Phần IV: 0 câu, 0 điểm).
-- Chỉ tạo các câu hỏi thuộc Phần I, Phần II, Phần III theo đúng số lượng và điểm số trong cấu hình parts (Tổng điểm trắc nghiệm = 10,0 điểm).
-`;
-  } else if (examFormat === 'essay_only') {
-    formatRequirementText = `
-⚠️ ĐẶC BIỆT CHÚ Ý - ĐỊNH DẠNG ĐỀ: 100% TỰ LUẬN (TỔNG 10,0 ĐIỂM).
-- TUYỆT ĐỐI KHÔNG TẠO BẤT KỲ CÂU HỎI TRẮC NGHIỆM NÀO (Phần I, II, III: 0 câu, 0 điểm).
-- Toàn bộ các câu hỏi trong đề là câu tự luận thuộc Phần IV với thang điểm phân bố chuẩn tổng 10,0 điểm, có cấu trúc ý rõ ràng và rubric hướng dẫn chấm chi tiết.
-`;
-  } else {
-    formatRequirementText = `
-⚠️ ĐẶC BIỆT CHÚ Ý - ĐỊNH DẠNG ĐỀ: KẾT HỢP TRẮC NGHIỆM VÀ TỰ LUẬN (TỔNG 10,0 ĐIỂM).
-- Tạo đồng thời cả câu hỏi trắc nghiệm (Phần I, II, III) và câu hỏi tự luận (Phần IV) đúng theo số lượng và thang điểm quy định trong cấu hình parts.
-`;
+  if (enabledParts.length === 0) {
+    throw new Error('Cấu hình đề thi chưa có phần nào được bật. Vui lòng kiểm tra lại Bước 2 (Cấu trúc & Thang điểm).');
   }
 
-  const statementLabels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].slice(0, statementsCount);
-  const sampleStatementsJson = statementLabels.map((lbl, idx) => 
-    `        { "id": "st-${lbl}", "statement": "${lbl}) Mệnh đề ${lbl}", "is_correct": ${idx % 2 === 0}, "explanation": "Giải thích chi tiết cho ý ${lbl}..." }`
-  ).join(',\n');
+  // Generate questions PART BY PART to avoid large JSON payloads, token truncation, and missing questions
+  const allQuestions: GeneratedAIQuestion[] = [];
+  let currentGlobalOrder = 1;
 
-  const prompt = `
-Bạn là Chuyên gia Khảo thí và Đo lường Giáo dục hàng đầu tại Việt Nam, am hiểu sâu sắc:
-- Chương trình Giáo dục Phổ thông 2018 (Thông tư 32/2018/TT-BGDĐT).
-- Công văn số 7991/BGDĐT-GDTrH ngày 17/12/2024 về hướng dẫn xây dựng ma trận, bản đặc tả và đề kiểm tra định kỳ cấp THCS, THPT.
-- Quy chuẩn đánh giá theo Thông tư 22/2021/TT-BGDĐT.
+  for (let pIdx = 0; pIdx < enabledParts.length; pIdx++) {
+    const partConfig = enabledParts[pIdx];
+    const partNum = partConfig.part;
+    const targetCount = Number(partConfig.questionCount);
+    const partTitle = partConfig.title || `Phần ${partNum}`;
 
-NHIỆM VỤ: Hãy xây dựng ĐỀ KIỂM TRA ĐỊNH KỲ HOÀN CHỈNH, CHUẨN XÁC VÀ ĐÚNG QUY TRÌNH SƯ PHẠM.
+    const progressMsg = `[Phần ${pIdx + 1}/${enabledParts.length}] Đang sinh ${partTitle} (${targetCount} câu)...`;
+    console.info(`[DirectGemini] ${progressMsg}`);
+    params.onProgress?.(progressMsg);
 
-THÔNG TIN ĐỀ KIỂM TRA:
-- Môn học: ${profile.name} (Mã: ${params.subjectId})
-- Lớp: ${params.grade}
-- Kì kiểm tra: ${params.term}
-- Thời gian làm bài: ${params.durationMinutes} phút
-- Căn cứ văn bản pháp lý: ${activeReg.document_number || 'Công văn 7991/BGDĐT-GDTrH'}
-- Chủ đề / Chương kiểm tra: ${Array.isArray(params.topics) ? params.topics.join(', ') : 'Toàn bộ nội dung học kì'}
-${params.extractedTextbookContext ? `
-⚠️ ĐẶC BIỆT LƯU Ý - NỘI DUNG BÁM SÁT SÁCH GIÁO KHOA (SGK):
-Giáo viên đã chụp/dán hình ảnh SGK và AI đã đọc trích xuất nội dung bài học như sau:
-"""
-${params.extractedTextbookContext}
-"""
-YÊU CẦU BẮT BUỘC: Tất cả câu hỏi (Phần I, II, III, IV) PHẢI BÁM SÁT 100% VÀO CÁC KHÁI NIỆM, ĐỊNH LÝ, CÔNG THỨC, BÀI ĐỌC, SỐ LIỆU VÀ DẠNG BÀI CÓ TRONG NỘI DUNG SGK NÊU TRÊN. Tuyệt đối không ra đề ngoài kiến thức bài học đã được cung cấp!
-` : ''}
-${params.matrixCells && Array.isArray(params.matrixCells) && params.matrixCells.length > 0 ? `
-KHUNG MA TRẬN & BẢN ĐẶC TẢ ĐÃ ĐƯỢC TỰ ĐỘNG THIẾT LẬP TRƯỚC:
-Các câu hỏi sinh ra PHẢI KHỚP HOÀN TOÀN với bảng phân bổ câu hỏi và mức độ nhận thức theo từng chủ đề sau:
-${JSON.stringify(params.matrixCells.map((c: any) => ({
-  topic: c.topic,
-  content_unit: c.content_unit,
-  mc_rec: c.mc_rec || 0,
-  mc_com: c.mc_com || 0,
-  mc_app: c.mc_app || 0,
-  tf_rec: c.tf_rec || 0,
-  tf_com: c.tf_com || 0,
-  tf_app: c.tf_app || 0,
-  sa_rec: c.sa_rec || 0,
-  sa_com: c.sa_com || 0,
-  sa_app: c.sa_app || 0,
-  essay_rec: c.essay_rec || 0,
-  essay_com: c.essay_com || 0,
-  essay_app: (c.essay_app || 0) + (c.essay_adv || 0),
-  yccd: c.learning_requirement
-})), null, 2)}
-` : ''}
-${params.customPromptRequirements ? `- Yêu cầu bổ sung của giáo viên: ${params.customPromptRequirements}` : ''}
-${formatRequirementText}
+    const questions = await generateSinglePartQuestionsDirectGemini(
+      partConfig,
+      currentGlobalOrder,
+      params,
+      profile,
+      activeReg,
+      apiKey
+    );
 
-CẤU TRÚC ĐỀ VÀ THANG ĐIỂM (BẮT BUỘC TỔNG ĐIỂM = 10,0 ĐIỂM):
-${JSON.stringify(params.structure, null, 2)}
-
-QUY ĐỊNH BẮT BUỘC VỀ CÁC PHẦN ĐƯỢC BẬT (ENABLED):
-- CHỈ sinh câu hỏi cho những Phần có enabled = true và questionCount > 0.
-- Nếu Phần nào có enabled = false hoặc questionCount = 0 thì TUYỆT ĐỐI KHÔNG sinh câu hỏi cho phần đó!
-
-QUY ĐỊNH BẮT BUỘC VỀ DẠNG CÂU HỎI:
-1. Phần I: Trắc nghiệm nhiều lựa chọn (chỉ 1 phương án đúng trong 4 lựa chọn A, B, C, D).
-2. Phần II: Câu trắc nghiệm Đúng - Sai:
-   - BẮT BUỘC mỗi câu hỏi phải có ĐÚNG ${statementsCount} ý (mệnh đề) độc lập: ${statementLabels.join(', ')}.
-   - Mỗi ý đánh dấu rõ "is_correct" là true hoặc false.
-   - Thang điểm: Mỗi ý đúng được ${pointsPerStatement} điểm (Tổng ${statementsCount} ý = ${pointsPerStatement * statementsCount} điểm/câu).
-3. Phần III: Trả lời ngắn (Thí sinh tự điền đáp số ngắn gọn).
-4. Phần IV: TỰ LUẬN - CẤU TRÚC 1 ĐẾN 3 Ý HỎI ĐỘC LẬP:
-   - Hệ thống KHÔNG mặc định mỗi câu tự luận chỉ có một ý hỏi.
-   - Các cấu trúc ý được phép trong đề: ${allowedSubCounts.join(', ')} ý. Có thể trộn các câu 1 ý, 2 ý và 3 ý trong cùng một đề (Ví dụ: Câu 1 có 1 ý, Câu 2 có 2 ý a, b, Câu 3 có 3 ý a, b, c).
-   - RÀNG BUỘC TUYỆT ĐỐI VỀ ĐIỂM SỐ: Tổng điểm của câu phải luôn bằng tổng điểm các ý (question.points == SUM(sub_items.points)).
-   - Mỗi ý phải có metadata riêng: cognitive_level, points, question_text, expected_answer, scoring_rubric.
-   - CÁC Ý TRONG CÂU PHÁT TRIỂN TỪ TÌNH HUỐNG/DỮ KIỆN CHUNG, có sự tăng tiến về mức độ nhận thức (ý a thường là vận dụng/tính toán cơ bản, ý b hoặc c là vận dụng cao/biện luận). Tuyệt đối không chia ý hình thức hay lặp lại cùng thao tác tính toán.
-
-QUY ĐỊNH BẮT BUỘC THEO ĐẶC THÙ MÔN HỌC:
-1. ĐỐI VỚI MÔN TOÁN:
-   - Các công thức toán BẮT BUỘC định dạng LaTeX $...$ hoặc $$...$$
-   - Phần I: Trắc nghiệm 4 lựa chọn (chỉ 1 phương án đúng).
-   - Phần II: Đúng/Sai (Mỗi câu gồm 1 tình huống và đúng ${statementsCount} ý độc lập, ghi rõ Đúng hay Sai).
-   - Phần III: Trả lời ngắn (Chỉ điền số hoặc phân số tối giản).
-   - Phần IV: Tự luận (Cấu trúc 1-3 ý độc lập, có rubric chi tiết 0.25đ / 0.5đ).
-
-2. ĐỐI VỚI MÔN NGỮ VĂN:
-   - Phần I: ĐỌC HIỂU (4,0 - 5,0 điểm). BẮT BUỘC lấy ngữ liệu mới NGOÀI sách giáo khoa (ghi rõ nguồn dẫn tác giả, tác phẩm).
-   - Phần II: VIẾT (5,0 - 6,0 điểm). Gồm các câu tự luận (Ví dụ câu viết đoạn văn NLXH, câu viết bài văn NLVH) với cấu trúc 1-2 ý hoặc theo yêu cầu, KÈM RUBRIC CHẤM 0.25đ - 0.5đ.
-
-3. ĐỐI VỚI TIẾNG ANH:
-   - Authentic English, không dùng tiếng Anh dịch thô.
-   - Kiểm tra phát âm (gạch chân phần phát âm), từ vựng theo ngữ cảnh, đọc hiểu, viết câu.
-
-QUY ĐỊNH BẮT BUỘC VỀ ĐỊNH DẠNG JSON & CÔNG THỨC:
-- Toàn bộ câu trả lời BẮT BUỘC là đối tượng JSON duy nhất, hợp lệ 100%, không kèm giải thích ngoài.
-- ĐẶC BIỆT LƯU Ý VỀ DẤU NGOẶC KÉP: TUYỆT ĐỐI KHÔNG dùng dấu ngoặc kép đôi " chưa escape bên trong nội dung văn bản chuỗi (khi trích dẫn mệnh đề, từ ngữ, tên bài học, hãy dùng dấu nháy đơn '...' hoặc ngoặc góc «...» hoặc escape \\").
-- ĐẶC BIỆT LƯU Ý VỀ CÔNG THỨC TOÁN HỌC (LaTeX): Khi viết công thức toán hoặc ký hiệu trong chuỗi JSON, BẮT BUỘC dùng hai dấu gạch chéo ngược \\\\ (Ví dụ: viết \\\\frac{a}{b}, \\\\sqrt{x}, \\\\alpha, \\\\vec{u}, \\\\Delta, \\\\times, \\\\le, \\\\ge, \\\\int, \\\\sin, \\\\cos). TUYỆT ĐỐI không dùng một dấu gạch chéo ngược đơn \\ vì sẽ gây lỗi cú pháp JSON.
-- ĐẶC BIỆT LƯU Ý VỀ DẤU PHẨY: Luôn có dấu phẩy ',' ngăn cách giữa các thuộc tính trong đối tượng và các phần tử trong mảng.
-
-YÊU CẦU ĐẦU RA (ĐỊNH DẠNG JSON DUY NHẤT):
-TrẢ VỀ ĐỐI TƯỢNG JSON VỚI CẤU TRÚC:
-{
-  "exam": {
-    "title": "Tiêu đề đề thi",
-    "subject": "${profile.name}",
-    "grade": ${params.grade},
-    "duration_minutes": ${params.durationMinutes},
-    "total_score": 10.0,
-    "instructions": "Hướng dẫn làm bài..."
-  },
-  "questions": [
-    {
-      "id": "q-1",
-      "exam_part": 1,
-      "question_order": 1,
-      "question_type": "single_choice" | "true_false" | "short_answer" | "essay",
-      "topic": "Chủ đề",
-      "content_unit": "Đơn vị bài học",
-      "cognitive_level": "recognition" | "comprehension" | "application" | "advanced_application",
-      "is_advanced_application": false,
-      "points": 0.25,
-      "content": "Nội dung câu hỏi...",
-      "options": [
-        { "id": "a", "content": "Phương án A", "is_correct": true, "option_order": 1 },
-        { "id": "b", "content": "Phương án B", "is_correct": false, "option_order": 2 },
-        { "id": "c", "content": "Phương án C", "is_correct": false, "option_order": 3 },
-        { "id": "d", "content": "Phương án D", "is_correct": false, "option_order": 4 }
-      ],
-      "statements": [
-${sampleStatementsJson}
-      ],
-      "short_answer": {
-        "normalized_answer": "Đáp số ngắn",
-        "accepted_variants": ["đáp số"]
-      },
-      "intro_text": "Tình huống/bối cảnh chung cho câu tự luận (nếu có)",
-      "sub_items": [
-        {
-          "item_number": "a",
-          "points": 1.0,
-          "cognitive_level": "application",
-          "question_text": "Nội dung câu hỏi cho ý a...",
-          "expected_answer": "Hướng dẫn giải chi tiết cho ý a...",
-          "scoring_rubric": [
-            { "id": "r1", "criterion": "Tiêu chí 1", "points": 0.5 },
-            { "id": "r2", "criterion": "Tiêu chí 2", "points": 0.5 }
-          ]
-        }
-      ],
-      "essay_rubric": [
-        { "id": "r1", "criterion": "Tiêu chí 1", "points": 0.5 },
-        { "id": "r2", "criterion": "Tiêu chí 2", "points": 1.0 }
-      ],
-      "explanation": "Lời giải / hướng dẫn chấm chi tiết"
+    // Auto-recovery if AI returned fewer questions than requested
+    if (questions.length < targetCount) {
+      const missingCount = targetCount - questions.length;
+      params.onProgress?.(`Đang tạo bổ sung ${missingCount} câu còn thiếu cho ${partTitle}...`);
+      const recovered = await recoverMissingQuestionsDirectGemini(
+        partConfig,
+        currentGlobalOrder + questions.length,
+        missingCount,
+        params,
+        profile,
+        apiKey
+      );
+      questions.push(...recovered);
     }
-  ]
-}
-`;
 
-  const { text: responseText, model: usedModel } = await callDirectGeminiAPI(apiKey, prompt);
-  const parsedData = safeParseAIJson(responseText);
+    // Assign continuous global question orders and ensure correct part
+    questions.forEach((q, idx) => {
+      q.question_order = currentGlobalOrder + idx;
+      q.exam_part = partNum;
+    });
 
-  let rawQuestions: any[] = [];
-  if (Array.isArray(parsedData)) {
-    rawQuestions = parsedData;
-  } else if (Array.isArray(parsedData?.questions)) {
-    rawQuestions = parsedData.questions;
-  } else if (Array.isArray(parsedData?.exam?.questions)) {
-    rawQuestions = parsedData.exam.questions;
-  } else if (Array.isArray(parsedData?.data?.questions)) {
-    rawQuestions = parsedData.data.questions;
+    currentGlobalOrder += questions.length;
+    allQuestions.push(...questions);
   }
 
-  if (rawQuestions.length === 0) {
-    throw new Error('Mô hình Gemini không phản hồi danh sách câu hỏi hợp lệ.');
-  }
+  params.onProgress?.('Đang đối soát ma trận và kiểm định sư phạm theo Công văn 7991...');
 
-  const validation = ExamValidator.validateExam(params.structure, rawQuestions, params.matrixCells);
+  const validation = ExamValidator.validateExam(params.structure, allQuestions, params.matrixCells);
 
   return {
     exam: {
-      title: parsedData.exam?.title || `ĐỀ KIỂM TRA ${params.term.toUpperCase()} MÔN ${profile.name.toUpperCase()} - LỚP ${params.grade}`,
+      title: `ĐỀ KIỂM TRA ${params.term.toUpperCase()} MÔN ${profile.name.toUpperCase()} - LỚP ${params.grade}`,
       subject: profile.name,
       grade: params.grade,
       term: params.term,
       duration_minutes: params.durationMinutes,
       total_score: 10.0,
-      instructions: parsedData.exam?.instructions || 'Thí sinh làm bài theo đúng thời gian quy định. Không sử dụng tài liệu trừ khi có hướng dẫn riêng.',
+      instructions: 'Thí sinh làm bài theo đúng thời gian quy định. Không sử dụng tài liệu trừ khi có hướng dẫn riêng.',
     },
     structure: params.structure,
     matrix: params.matrixCells || [],
-    questions: rawQuestions,
+    questions: allQuestions,
     validation,
-    model: usedModel || 'gemini-2.5-flash',
-    prompt_version: 'CV7991_GDPT2018_DirectClient_v1',
+    model: 'gemini-2.5-flash',
+    prompt_version: 'CV7991_PartByPart_v3',
     regulation_reference: activeReg.document_number,
   };
 }

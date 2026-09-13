@@ -732,8 +732,8 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
         }
       }
 
-      // BƯỚC 2: AI sinh đề dựa theo ma trận và đặc tả vừa sinh
-      setGenerationProgress('Bước 2/2: AI đang sinh hệ thống câu hỏi bám sát 100% Ma trận và Bảng đặc tả vừa thiết lập...');
+      // BƯỚC 2: AI sinh đề dựa theo ma trận và đặc tả vừa sinh (sinh theo từng phần để đảm bảo đủ 100% số câu)
+      setGenerationProgress('Giai đoạn 2: AI đang chuẩn bị tạo Đề thi & Đáp án chi tiết bám sát Ma trận...');
 
       const response = await aiExamService.generateExam({
         subjectId: selectedSubject,
@@ -750,6 +750,7 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
         customPromptRequirements: customPrompt,
         extractedTextbookContext: extractedTextbookContext || undefined,
         textbookResult: textbookResult || undefined,
+        onProgress: (msg: string) => setGenerationProgress(msg),
       });
 
       setGeneratedExamData(response);
@@ -957,7 +958,7 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
             <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${
               currentStep === 'matrix' ? 'bg-amber-300 text-indigo-950 font-black' : 'bg-indigo-600 text-white'
             }`}>3</span>
-            <span className="hidden sm:inline">3. Ma trận & Đặc tả</span>
+            <span className="hidden sm:inline">3. Ma trận & Đặc tả (Phần 1)</span>
           </div>
 
           <div 
@@ -969,7 +970,7 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
             <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${
               currentStep === 'preview' ? 'bg-amber-300 text-indigo-950 font-black' : 'bg-indigo-600 text-white'
             }`}>4</span>
-            <span className="hidden sm:inline">4. Xem trước & Duyệt</span>
+            <span className="hidden sm:inline">4. Đề thi & Đáp án (Phần 2)</span>
           </div>
         </div>
       </div>
@@ -2471,18 +2472,21 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
 
           {/* Automatic Generation Informational Banner */}
           {!isGeneratingMatrix && (
-            <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-start space-x-3 text-xs text-emerald-900">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <span className="font-bold">
-                  {isAIMatrixGenerated
-                    ? 'AI đã tự động hoàn thành Khung Ma Trận & Bản Đặc Tả theo chuẩn CV 7991/BGDĐT-GDTrH:'
-                    : 'Khung Ma Trận & Bản Đặc Tả sẵn sàng theo chuẩn CV 7991/BGDĐT-GDTrH:'}
-                </span>
-                <p className="text-emerald-800 text-[11px] leading-relaxed">
-                  Hệ thống đã liên kết {selectedTopics.length} chủ đề, phân bổ tỷ lệ các mức độ nhận thức và định dạng câu hỏi
-                  {textbookResult ? ` bám sát bài học nhận diện từ ảnh chụp SGK: "${textbookResult.detected_lesson_title}"` : ''}.
-                  Khi Thầy/Cô bấm nút tạo đề, AI sẽ sinh hệ thống câu hỏi bám sát 100% Ma trận và Bản đặc tả này.
+            <div className="p-4 bg-gradient-to-r from-emerald-50/90 to-indigo-50/90 border border-emerald-200/90 rounded-2xl flex items-start space-x-3.5 text-xs text-slate-800 shadow-xs">
+              <div className="p-2 bg-emerald-600 text-white rounded-xl shrink-0 mt-0.5 shadow-xs">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div className="space-y-1.5 flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-black text-emerald-950 text-sm">
+                    GIAI ĐOẠN 1: MA TRẬN & BẢNG ĐẶC TẢ ĐỀ THI (PHẦN RIÊNG BIỆT)
+                  </span>
+                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-bold text-[10px] rounded-full border border-emerald-300">
+                    Chuẩn CV 7991/BGDĐT-GDTrH
+                  </span>
+                </div>
+                <p className="text-slate-700 text-[11px] leading-relaxed">
+                  Hệ thống phân tách quy trình ra đề làm <strong>2 giai đoạn độc lập</strong>: Ma trận & Bảng đặc tả được thiết lập và thẩm định trước tại đây (Thầy/Cô có thể xem xét, điều chỉnh hoặc xuất file riêng). Sau đó ở <strong>Giai đoạn 2</strong>, AI sẽ sinh <strong>Đề thi & Đáp án</strong> theo từng phần để tối ưu độ dài văn bản JSON và đảm bảo luôn đủ 100% số lượng câu hỏi theo quy định.
                 </p>
               </div>
             </div>
@@ -2521,38 +2525,67 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
               className="inline-flex items-center px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl"
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
-              <span>Quay lại</span>
+              <span>Quay lại Cấu trúc</span>
             </button>
 
             <button
               id="btn-start-ai-generation"
               onClick={handleStartGeneration}
-              className="inline-flex items-center px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer"
+              className="inline-flex items-center px-6 py-2.5 bg-gradient-to-r from-indigo-600 via-indigo-700 to-teal-700 hover:from-indigo-700 hover:to-teal-800 text-white text-xs font-bold rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer"
             >
               <Sparkles className="w-4 h-4 mr-2 text-amber-300" />
-              <span>Tiến hành tạo đề thi bám sát Ma trận & Bảng đặc tả này</span>
+              <span>Duyệt Ma trận & Bắt đầu Giai đoạn 2: Sinh Đề thi + Đáp án (Đủ 100% số câu)</span>
             </button>
           </div>
         </div>
       )}
 
       {/* =========================================================================
-          STEP 4: GENERATING SCREEN (In-Progress)
+          STEP 4: GENERATING SCREEN (In-Progress) - 2-PHASE ARCHITECTURE
           ========================================================================= */}
       {currentStep === 'generating' && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-12 text-center space-y-6 max-w-xl mx-auto">
-          <div className="inline-flex p-4 bg-indigo-50 text-indigo-600 rounded-2xl animate-spin">
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-xl p-8 sm:p-12 text-center space-y-6 max-w-xl mx-auto animate-in fade-in zoom-in-95">
+          <div className="inline-flex p-4 bg-indigo-50 text-indigo-600 rounded-2xl animate-spin ring-8 ring-indigo-50/50">
             <RefreshCw className="w-8 h-8" />
           </div>
+
           <div>
-            <h3 className="text-lg font-bold text-slate-900">AI đang tiến hành xây dựng đề thi</h3>
-            <p className="text-xs text-indigo-600 font-medium mt-2">{generationProgress}</p>
+            <span className="px-3 py-1 bg-amber-100 text-amber-900 text-[10px] font-black uppercase tracking-wider rounded-full border border-amber-200">
+              Quy trình ra đề chuẩn 2 giai đoạn
+            </span>
+            <h3 className="text-xl font-black text-slate-900 mt-2">Đang sinh Đề thi & Đáp án bám sát Ma trận</h3>
+            <p className="text-xs text-indigo-600 font-semibold mt-1.5">{generationProgress}</p>
           </div>
+
+          {/* Two Phase Status Cards */}
+          <div className="grid grid-cols-2 gap-3 text-left">
+            <div className="p-3.5 bg-emerald-50/80 border border-emerald-200 rounded-2xl">
+              <div className="flex items-center space-x-1.5 text-emerald-700 font-bold text-xs">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                <span>Giai đoạn 1: Ma trận & Đặc tả</span>
+              </div>
+              <p className="text-[10px] text-emerald-800/80 mt-1">
+                ✓ Đã hoàn tất độc lập theo CV 7991
+              </p>
+            </div>
+
+            <div className="p-3.5 bg-indigo-50/80 border border-indigo-200 rounded-2xl">
+              <div className="flex items-center space-x-1.5 text-indigo-700 font-bold text-xs">
+                <RefreshCw className="w-4 h-4 shrink-0 text-indigo-600 animate-spin" />
+                <span>Giai đoạn 2: Đề thi & Đáp án</span>
+              </div>
+              <p className="text-[10px] text-indigo-800/80 mt-1">
+                Đang tạo từng phần để đảm bảo đủ 100% số câu
+              </p>
+            </div>
+          </div>
+
           <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-            <div className="bg-indigo-600 h-full w-2/3 animate-pulse rounded-full" />
+            <div className="bg-gradient-to-r from-indigo-600 via-teal-500 to-emerald-500 h-full w-4/5 animate-pulse rounded-full" />
           </div>
-          <p className="text-[11px] text-slate-400">
-            Hệ thống đang tích hợp văn bản {activeRegulation.document_number} và đảm bảo tính toán thang điểm 10,0 chính xác.
+
+          <p className="text-[11px] text-slate-500 max-w-md mx-auto leading-relaxed">
+            Hệ thống sinh theo từng phần (Part-by-Part) để tối ưu hóa độ dài chuỗi JSON, loại bỏ hiện tượng tràn token và đảm bảo đầy đủ câu hỏi, đáp án, lời giải và thang điểm 10,0.
           </p>
         </div>
       )}
