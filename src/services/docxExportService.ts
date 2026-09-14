@@ -3,6 +3,7 @@ import katex from 'katex';
 import { mml2omml } from 'mathml2omml';
 import { GeneratedAIQuestion, ExamStructureConfig, MatrixCellSpecification } from '../types/aiExam';
 import { Exam, Matrix, Question } from '../types';
+import { cleanQuestionContent } from '../lib/idUtils';
 import { buildCV7991Data, renderCV7991MatrixWordXml, renderCV7991SpecificationWordXml, CV7991Data } from '../lib/cv7991MatrixHelper';
 
 // XML Escape helper with strict invalid control character removal for ECMA-376 compliance
@@ -601,7 +602,7 @@ function renderQuestionsToWordXml(
 
       // Question content with embedded OMML equations
       const qHeader = parseTextToWordRuns(`Câu ${qNum}${pointsText}: `, { bold: true, size: 24 });
-      const qBody = parseTextToWordRuns(q.content || '', { size: 24 });
+      const qBody = parseTextToWordRuns(cleanQuestionContent(q.content || ''), { size: 24 });
       bodyXml += createWordParagraph(qHeader + qBody, { spacingBefore: 100, spacingAfter: 60 });
 
       // Options for Part I
@@ -760,7 +761,7 @@ export async function exportAnswersToWord(params: {
     const points = q.points ? ` (${q.points} điểm)` : '';
 
     let contentXml = parseTextToWordRuns(`Câu ${num}${points}: `, { bold: true, size: 24 }) +
-      parseTextToWordRuns(q.content || '', { size: 24 });
+      parseTextToWordRuns(cleanQuestionContent(q.content || ''), { size: 24 });
     bodyXml += createWordParagraph(contentXml, { spacingBefore: 100, spacingAfter: 40 });
 
     // Correct Answer line for Multiple Choice
@@ -1009,7 +1010,7 @@ export async function exportFullExamDossierToWord(params: {
 
     bodyXml += createWordParagraph(
       parseTextToWordRuns(`Câu ${num}${points}: `, { bold: true, size: 24 }) +
-      parseTextToWordRuns(q.content || '', { size: 24 }),
+      parseTextToWordRuns(cleanQuestionContent(q.content || ''), { size: 24 }),
       { spacingBefore: 80, spacingAfter: 40 }
     );
 

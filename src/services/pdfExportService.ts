@@ -1,6 +1,7 @@
 import katex from 'katex';
 import { GeneratedAIQuestion, ExamStructureConfig, MatrixCellSpecification } from '../types/aiExam';
 import { Exam, Matrix, Question } from '../types';
+import { cleanQuestionContent } from '../lib/idUtils';
 import { getQuestionStatements, NormalizedStatement } from './docxExportService';
 import { buildCV7991Data, renderCV7991MatrixHtml, renderCV7991SpecificationHtml, CV7991Data } from '../lib/cv7991MatrixHelper';
 
@@ -314,7 +315,7 @@ function renderExamQuestionsHtml(
     partQuestions.forEach((q) => {
       const qNum = q.question_order || currentOrder++;
       const points = q.points ? ` (${q.points} điểm)` : '';
-      const renderedContent = renderMathInHtml(q.content || '');
+      const renderedContent = renderMathInHtml(cleanQuestionContent(q.content || ''));
 
       bodyHtml += `
         <div class="question-block">
@@ -547,7 +548,7 @@ export function exportAnswersToPdf(params: {
   (questions as any[]).forEach((q) => {
     const num = q.question_order || qOrder++;
     const points = q.points ? ` (${q.points} điểm)` : '';
-    const content = renderMathInHtml(q.content || '');
+    const content = renderMathInHtml(cleanQuestionContent(q.content || ''));
     const explanation = q.explanation ? renderMathInHtml(q.explanation) : '';
 
     bodyHtml += `
@@ -783,7 +784,7 @@ export function exportFullExamDossierToPdf(params: {
     const num = q.question_order || qOrder++;
     const points = q.points ? ` (${q.points} điểm)` : '';
     bodyHtml += `<div class="question-block" style="border-bottom: 1px dashed #cbd5e1; padding-bottom: 8px; margin-bottom: 10px;">
-      <div><strong>Câu ${num}${points}:</strong> ${renderMathInHtml(q.content || '')}</div>
+      <div><strong>Câu ${num}${points}:</strong> ${renderMathInHtml(cleanQuestionContent(q.content || ''))}</div>
     `;
 
     const statements = getQuestionStatements(q);

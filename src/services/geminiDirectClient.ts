@@ -12,6 +12,7 @@ import { SubjectRuleEngine } from '../lib/subjectRuleEngine';
 import { regulationService } from './regulationService';
 import { ExamValidator } from '../lib/examValidator';
 import { safeParseAIJson, cleanJsonResponse } from '../lib/jsonRepairHelper';
+import { cleanQuestionContent } from '../lib/idUtils';
 
 export { safeParseAIJson, cleanJsonResponse };
 
@@ -356,6 +357,7 @@ ${partJsonSchema}
     // Clean and normalize questions
     return list.map((q, idx) => ({
       ...q,
+      content: cleanQuestionContent(q.content || ''),
       id: q.id || `q-${partNum}-${startOrder + idx}`,
       exam_part: partNum,
       question_order: startOrder + idx,

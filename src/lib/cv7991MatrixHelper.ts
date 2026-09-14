@@ -212,14 +212,33 @@ export function buildCV7991Data(params: {
 
   // Helper to determine question type from item or question
   const detectQuestionType = (item: any): 'mc' | 'tf' | 'sa' | 'essay' => {
+    const rawType = String(item.question_type || item.type || '').toLowerCase();
+    if (
+      rawType === 'single_choice' ||
+      rawType === 'multiple_choice' ||
+      rawType === 'choice' ||
+      rawType.includes('single') ||
+      rawType.includes('multiple') ||
+      rawType.includes('trac_nghiem') ||
+      rawType.includes('trắc nghiệm') ||
+      rawType.includes('nhieu_lua_chon')
+    ) {
+      return 'mc';
+    }
+    if (rawType.includes('true_false') || rawType.includes('dung_sai') || rawType.includes('đúng sai')) return 'tf';
+    if (rawType.includes('short_answer') || rawType.includes('ngan') || rawType.includes('ngắn')) return 'sa';
+    if (rawType.includes('essay') || rawType.includes('tu_luan') || rawType.includes('tự luận')) return 'essay';
+
+    // Structural checks if question_type is not explicit
+    if (item.statements && Array.isArray(item.statements) && item.statements.length > 0) return 'tf';
+    if (item.short_answer !== undefined && item.short_answer !== '') return 'sa';
+    if (item.essay_rubric && Array.isArray(item.essay_rubric) && item.essay_rubric.length > 0) return 'essay';
+    if (item.options && Array.isArray(item.options) && item.options.length > 0) return 'mc';
+
     if (item.exam_part === 1) return 'mc';
     if (item.exam_part === 2) return 'tf';
     if (item.exam_part === 3) return 'sa';
     if (item.exam_part === 4) return 'essay';
-    const t = String(item.question_type || item.type || '').toLowerCase();
-    if (t.includes('true_false') || t.includes('dung_sai') || t.includes('đúng sai')) return 'tf';
-    if (t.includes('short_answer') || t.includes('ngan') || t.includes('ngắn')) return 'sa';
-    if (t.includes('essay') || t.includes('tu_luan') || t.includes('tự luận')) return 'essay';
     return 'mc';
   };
 
@@ -414,7 +433,7 @@ export function buildCV7991Data(params: {
     });
   }
 
-  // 1. Determine topics list
+  // 1. Determine topics list with stable canonical precedence
   let topicList: { topic: string; contentUnit: string; requirement?: string; cellId?: string }[] = [];
 
   if (topicCellMap.size > 0) {
@@ -423,6 +442,22 @@ export function buildCV7991Data(params: {
       contentUnit: tc.contentUnit,
       requirement: tc.requirement,
       cellId: tc.cellId,
+    }));
+  } else if (topics && topics.length > 0) {
+    topicList = topics.map((t, idx) => {
+      const qMatch = (questions as any[])?.find((q) => q.topic === t && q.content_unit && !isGenericUnit(q.content_unit));
+      const matchedCurr = curriculumList.find((cur) => cur.topic === t || t.includes(cur.topic) || cur.topic.includes(t));
+      return {
+        topic: t,
+        contentUnit: qMatch?.content_unit || (matchedCurr && matchedCurr.units.length > 0 ? matchedCurr.units.join('; ') : `Nội dung trọng tâm: ${t}`),
+        requirement: `Học sinh nhận biết, thông hiểu và vận dụng các kiến thức cốt lõi thuộc ${t}`,
+      };
+    });
+  } else if (curriculumList.length > 0) {
+    topicList = curriculumList.slice(0, 4).map((cur) => ({
+      topic: cur.topic,
+      contentUnit: cur.units && cur.units.length > 0 ? cur.units.join('; ') : `Nội dung cốt lõi: ${cur.topic}`,
+      requirement: `Học sinh nhận biết, thông hiểu và vận dụng các kiến thức cốt lõi thuộc ${cur.topic}`,
     }));
   } else if (questions && questions.length > 0) {
     const pairMap = new Map<string, { topic: string; contentUnit: string; requirement?: string }>();
@@ -456,15 +491,6 @@ export function buildCV7991Data(params: {
     if (pairMap.size > 0) {
       topicList = Array.from(pairMap.values());
     }
-  } else if (topics && topics.length > 0) {
-    topicList = topics.map((t, idx) => {
-      const qMatch = (questions as any[])?.find((q) => q.topic === t && q.content_unit && !isGenericUnit(q.content_unit));
-      const matchedCurr = curriculumList.find((cur) => cur.topic === t || t.includes(cur.topic) || cur.topic.includes(t));
-      return {
-        topic: t,
-        contentUnit: qMatch?.content_unit || (matchedCurr && matchedCurr.units.length > 0 ? matchedCurr.units.join('; ') : `Nội dung trọng tâm: ${t}`),
-      };
-    });
   }
 
   // Guaranteed fallback: Load actual official curriculum topics for this subject & grade
@@ -530,6 +556,21 @@ export function buildCV7991Data(params: {
   let curSaNum = 1;
   let curEssayNum = 1;
 
+  // Pools of questions by type for orderly distribution into matrix cells
+  const allSortedQuestions = questions && questions.length > 0
+    ? [...(questions as any[])].sort((a, b) => (Number(a.question_order) || 0) - (Number(b.question_order) || 0))
+    : [];
+
+  const mcPool = allSortedQuestions.filter((q) => detectQuestionType(q) === 'mc').map((q, idx) => ({ ...q, part_order: idx + 1 }));
+  const tfPool = allSortedQuestions.filter((q) => detectQuestionType(q) === 'tf').map((q, idx) => ({ ...q, part_order: idx + 1 }));
+  const saPool = allSortedQuestions.filter((q) => detectQuestionType(q) === 'sa').map((q, idx) => ({ ...q, part_order: idx + 1 }));
+  const essayPool = allSortedQuestions.filter((q) => detectQuestionType(q) === 'essay').map((q, idx) => ({ ...q, part_order: idx + 1 }));
+
+  let mcPoolIdx = 0;
+  let tfPoolIdx = 0;
+  let saPoolIdx = 0;
+  let essayPoolIdx = 0;
+
   topicList.forEach((item, idx) => {
     const tt = idx + 1;
     const topicQuestions = questionsByTopic[item.topic] || [];
@@ -548,39 +589,8 @@ export function buildCV7991Data(params: {
     let essay_com = 0;
     let essay_app = 0;
 
-    let mcQs: any[] = [];
-    let tfQs: any[] = [];
-    let saQs: any[] = [];
-    let essayQs: any[] = [];
-
-    if (hasAnyQuestions && topicQuestions.length > 0) {
-      mcQs = topicQuestions.filter((q) => detectQuestionType(q) === 'mc');
-      tfQs = topicQuestions.filter((q) => detectQuestionType(q) === 'tf');
-      saQs = topicQuestions.filter((q) => detectQuestionType(q) === 'sa');
-      essayQs = topicQuestions.filter((q) => detectQuestionType(q) === 'essay');
-
-      mc_rec = mcQs.filter((q) => detectCognitiveTier(q) === 'rec').length;
-      mc_com = mcQs.filter((q) => detectCognitiveTier(q) === 'com').length;
-      mc_app = mcQs.filter((q) => detectCognitiveTier(q) === 'app').length;
-
-      tf_rec = tfQs.filter((q) => detectCognitiveTier(q) === 'rec').length;
-      tf_com = tfQs.filter((q) => detectCognitiveTier(q) === 'com').length;
-      tf_app = tfQs.filter((q) => detectCognitiveTier(q) === 'app').length;
-
-      sa_rec = saQs.filter((q) => detectCognitiveTier(q) === 'rec').length;
-      sa_com = saQs.filter((q) => detectCognitiveTier(q) === 'com').length;
-      sa_app = saQs.filter((q) => detectCognitiveTier(q) === 'app').length;
-
-      essay_rec = essayQs.filter((q) => detectCognitiveTier(q) === 'rec').length;
-      essay_com = essayQs.filter((q) => detectCognitiveTier(q) === 'com').length;
-      essay_app = essayQs.filter((q) => detectCognitiveTier(q) === 'app').length;
-    }
-
-    const currentTopicSum =
-      mc_rec + mc_com + mc_app + tf_rec + tf_com + tf_app + sa_rec + sa_com + sa_app + essay_rec + essay_com + essay_app;
-
-    // If no questions in topic, check topicCellMap
-    if (currentTopicSum === 0 && cellRecord && cellRecord.hasExplicitCounts) {
+    if (cellRecord && cellRecord.hasExplicitCounts) {
+      // 1. Matrix explicit cell counts are authoritative
       mc_rec = cellRecord.mc_rec;
       mc_com = cellRecord.mc_com;
       mc_app = cellRecord.mc_app;
@@ -593,8 +603,8 @@ export function buildCV7991Data(params: {
       essay_rec = cellRecord.essay_rec;
       essay_com = cellRecord.essay_com;
       essay_app = cellRecord.essay_app;
-    } else if (currentTopicSum === 0 && !hasAnyQuestions && !hasAnyCellCounts) {
-      // Pedagogically balanced fallback distribution compliant with CV 7991 (40% Biết, 30% Hiểu, 30% Vận dụng)
+    } else {
+      // 2. Canonical standard balanced distribution compliant with CV 7991 template
       const isFirst = idx === 0;
       const isSecond = idx === 1;
       const isLast = idx === topicList.length - 1;
@@ -623,6 +633,75 @@ export function buildCV7991Data(params: {
       }
     }
 
+    // Allocate question subsets accurately in strict sequential order
+    const allocateFromPoolOrTopic = (
+      reqCount: number,
+      tier: 'rec' | 'com' | 'app',
+      pool: any[],
+      poolIdxRef: { val: number },
+      topicPool: any[]
+    ): any[] => {
+      if (reqCount <= 0) return [];
+      const allocated: any[] = [];
+      while (allocated.length < reqCount && poolIdxRef.val < pool.length) {
+        allocated.push(pool[poolIdxRef.val++]);
+      }
+      return allocated;
+    };
+
+    const mcTopicPool = topicQuestions.filter((q) => detectQuestionType(q) === 'mc');
+    const tfTopicPool = topicQuestions.filter((q) => detectQuestionType(q) === 'tf');
+    const saTopicPool = topicQuestions.filter((q) => detectQuestionType(q) === 'sa');
+    const essayTopicPool = topicQuestions.filter((q) => detectQuestionType(q) === 'essay');
+
+    const mcRecRef = { val: mcPoolIdx };
+    const mcRecQs = allocateFromPoolOrTopic(mc_rec, 'rec', mcPool, mcRecRef, mcTopicPool);
+    mcPoolIdx = mcRecRef.val;
+
+    const mcComRef = { val: mcPoolIdx };
+    const mcComQs = allocateFromPoolOrTopic(mc_com, 'com', mcPool, mcComRef, mcTopicPool);
+    mcPoolIdx = mcComRef.val;
+
+    const mcAppRef = { val: mcPoolIdx };
+    const mcAppQs = allocateFromPoolOrTopic(mc_app, 'app', mcPool, mcAppRef, mcTopicPool);
+    mcPoolIdx = mcAppRef.val;
+
+    const tfRecRef = { val: tfPoolIdx };
+    const tfRecQs = allocateFromPoolOrTopic(tf_rec, 'rec', tfPool, tfRecRef, tfTopicPool);
+    tfPoolIdx = tfRecRef.val;
+
+    const tfComRef = { val: tfPoolIdx };
+    const tfComQs = allocateFromPoolOrTopic(tf_com, 'com', tfPool, tfComRef, tfTopicPool);
+    tfPoolIdx = tfComRef.val;
+
+    const tfAppRef = { val: tfPoolIdx };
+    const tfAppQs = allocateFromPoolOrTopic(tf_app, 'app', tfPool, tfAppRef, tfTopicPool);
+    tfPoolIdx = tfAppRef.val;
+
+    const saRecRef = { val: saPoolIdx };
+    const saRecQs = allocateFromPoolOrTopic(sa_rec, 'rec', saPool, saRecRef, saTopicPool);
+    saPoolIdx = saRecRef.val;
+
+    const saComRef = { val: saPoolIdx };
+    const saComQs = allocateFromPoolOrTopic(sa_com, 'com', saPool, saComRef, saTopicPool);
+    saPoolIdx = saComRef.val;
+
+    const saAppRef = { val: saPoolIdx };
+    const saAppQs = allocateFromPoolOrTopic(sa_app, 'app', saPool, saAppRef, saTopicPool);
+    saPoolIdx = saAppRef.val;
+
+    const essayRecRef = { val: essayPoolIdx };
+    const essayRecQs = allocateFromPoolOrTopic(essay_rec, 'rec', essayPool, essayRecRef, essayTopicPool);
+    essayPoolIdx = essayRecRef.val;
+
+    const essayComRef = { val: essayPoolIdx };
+    const essayComQs = allocateFromPoolOrTopic(essay_com, 'com', essayPool, essayComRef, essayTopicPool);
+    essayPoolIdx = essayComRef.val;
+
+    const essayAppRef = { val: essayPoolIdx };
+    const essayAppQs = allocateFromPoolOrTopic(essay_app, 'app', essayPool, essayAppRef, essayTopicPool);
+    essayPoolIdx = essayAppRef.val;
+
     const total_rec = mc_rec + tf_rec + sa_rec + essay_rec;
     const total_com = mc_com + tf_com + sa_com + essay_com;
     const total_app = mc_app + tf_app + sa_app + essay_app;
@@ -645,7 +724,16 @@ export function buildCV7991Data(params: {
       if (count <= 0) return '';
       if (qArr && qArr.length > 0) {
         const labels = qArr
-          .map((q) => (q.question_order ? `C${q.question_order}` : q.id ? `C${q.id}` : ''))
+          .map((q) => {
+            let order = q.part_order;
+            if (!order) {
+              if (partType === 'mc') order = curMcNum++;
+              else if (partType === 'tf') order = curTfNum++;
+              else if (partType === 'sa') order = curSaNum++;
+              else order = curEssayNum++;
+            }
+            return `C${order}`;
+          })
           .filter(Boolean)
           .join(', ');
         return labels ? `${count} (${labels})` : `${count}`;
@@ -682,9 +770,9 @@ export function buildCV7991Data(params: {
       total_app,
       total_points,
       percentage,
-      questions_rec: mcQs.filter((q) => detectCognitiveTier(q) === 'rec').map((q) => `C${q.question_order}`),
-      questions_com: mcQs.filter((q) => detectCognitiveTier(q) === 'com').map((q) => `C${q.question_order}`),
-      questions_app: mcQs.filter((q) => detectCognitiveTier(q) === 'app').map((q) => `C${q.question_order}`),
+      questions_rec: mcRecQs.map((q) => (q.part_order ? `C${q.part_order}` : q.question_order ? `C${q.question_order}` : '')).filter(Boolean),
+      questions_com: mcComQs.map((q) => (q.part_order ? `C${q.part_order}` : q.question_order ? `C${q.question_order}` : '')).filter(Boolean),
+      questions_app: mcAppQs.map((q) => (q.part_order ? `C${q.part_order}` : q.question_order ? `C${q.question_order}` : '')).filter(Boolean),
     };
     rows.push(row);
 
@@ -695,35 +783,35 @@ export function buildCV7991Data(params: {
       recognition: {
         requirement: item.requirement || getStandardRequirement('recognition', item.topic, item.contentUnit),
         mc_count: mc_rec,
-        mc_questions: formatSpecRefWithSeq(mc_rec, mcQs.filter((q) => detectCognitiveTier(q) === 'rec'), 'mc'),
+        mc_questions: formatSpecRefWithSeq(mc_rec, mcRecQs, 'mc'),
         tf_count: tf_rec,
-        tf_questions: formatSpecRefWithSeq(tf_rec, tfQs.filter((q) => detectCognitiveTier(q) === 'rec'), 'tf'),
+        tf_questions: formatSpecRefWithSeq(tf_rec, tfRecQs, 'tf'),
         sa_count: sa_rec,
-        sa_questions: formatSpecRefWithSeq(sa_rec, saQs.filter((q) => detectCognitiveTier(q) === 'rec'), 'sa'),
+        sa_questions: formatSpecRefWithSeq(sa_rec, saRecQs, 'sa'),
         essay_count: essay_rec,
-        essay_questions: formatSpecRefWithSeq(essay_rec, essayQs.filter((q) => detectCognitiveTier(q) === 'rec'), 'essay'),
+        essay_questions: formatSpecRefWithSeq(essay_rec, essayRecQs, 'essay'),
       },
       comprehension: {
         requirement: getStandardRequirement('comprehension', item.topic, item.contentUnit),
         mc_count: mc_com,
-        mc_questions: formatSpecRefWithSeq(mc_com, mcQs.filter((q) => detectCognitiveTier(q) === 'com'), 'mc'),
+        mc_questions: formatSpecRefWithSeq(mc_com, mcComQs, 'mc'),
         tf_count: tf_com,
-        tf_questions: formatSpecRefWithSeq(tf_com, tfQs.filter((q) => detectCognitiveTier(q) === 'com'), 'tf'),
+        tf_questions: formatSpecRefWithSeq(tf_com, tfComQs, 'tf'),
         sa_count: sa_com,
-        sa_questions: formatSpecRefWithSeq(sa_com, saQs.filter((q) => detectCognitiveTier(q) === 'com'), 'sa'),
+        sa_questions: formatSpecRefWithSeq(sa_com, saComQs, 'sa'),
         essay_count: essay_com,
-        essay_questions: formatSpecRefWithSeq(essay_com, essayQs.filter((q) => detectCognitiveTier(q) === 'com'), 'essay'),
+        essay_questions: formatSpecRefWithSeq(essay_com, essayComQs, 'essay'),
       },
       application: {
         requirement: getStandardRequirement('application', item.topic, item.contentUnit),
         mc_count: mc_app,
-        mc_questions: formatSpecRefWithSeq(mc_app, mcQs.filter((q) => detectCognitiveTier(q) === 'app'), 'mc'),
+        mc_questions: formatSpecRefWithSeq(mc_app, mcAppQs, 'mc'),
         tf_count: tf_app,
-        tf_questions: formatSpecRefWithSeq(tf_app, tfQs.filter((q) => detectCognitiveTier(q) === 'app'), 'tf'),
+        tf_questions: formatSpecRefWithSeq(tf_app, tfAppQs, 'tf'),
         sa_count: sa_app,
-        sa_questions: formatSpecRefWithSeq(sa_app, saQs.filter((q) => detectCognitiveTier(q) === 'app'), 'sa'),
+        sa_questions: formatSpecRefWithSeq(sa_app, saAppQs, 'sa'),
         essay_count: essay_app,
-        essay_questions: formatSpecRefWithSeq(essay_app, essayQs.filter((q) => detectCognitiveTier(q) === 'app'), 'essay'),
+        essay_questions: formatSpecRefWithSeq(essay_app, essayAppQs, 'essay'),
       },
     });
   });

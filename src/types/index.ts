@@ -1,5 +1,7 @@
 // Comprehensive TypeScript types for Online Examination System
 
+export const DEFAULT_ACADEMIC_YEAR = '2026 - 2027';
+
 export type UserRole = 'admin' | 'user' | 'teacher' | 'student';
 export type UserStatus = 'active' | 'inactive' | 'locked';
 
@@ -79,6 +81,7 @@ export interface Student {
   user_id?: string | null;
   student_code: string;
   full_name: string;
+  email?: string;
   date_of_birth?: string;
   class_id?: string;
   class_name?: string;
@@ -135,6 +138,11 @@ export interface Question {
   correct_answer?: string;
   normalized_answer?: string;
   exam_part?: number;
+  topic?: string;
+  content_unit?: string;
+  learning_requirement?: string;
+  short_answer?: string;
+  essay_rubric?: any[];
   intro_text?: string;
   sub_items?: any[];
   attachments?: QuestionAttachment[];

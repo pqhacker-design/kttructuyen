@@ -1,6 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
-import { SchoolClass, Student } from '../types';
+import { SchoolClass, Student, DEFAULT_ACADEMIC_YEAR } from '../types';
 import { mockStore } from './mockStore';
+import { isUUID } from '../lib/idUtils';
 
 export async function fetchClasses(teacherId?: string): Promise<SchoolClass[]> {
   if (!isSupabaseConfigured()) {
@@ -18,7 +19,7 @@ export async function fetchClasses(teacherId?: string): Promise<SchoolClass[]> {
       .order('grade', { ascending: true })
       .order('name', { ascending: true });
 
-    if (teacherId) {
+    if (teacherId && isUUID(teacherId)) {
       query = query.eq('teacher_id', teacherId);
     }
 
@@ -28,10 +29,12 @@ export async function fetchClasses(teacherId?: string): Promise<SchoolClass[]> {
       return mockStore.getClasses();
     }
 
-    return (data || []).map((c: any) => ({
+    const mapped = (data || []).map((c: any) => ({
       ...c,
       student_count: c.students?.[0]?.count || 0,
     }));
+    mockStore.syncClasses(mapped);
+    return mapped;
   } catch (err: any) {
     console.warn('Network error fetching classes, using local store:', err?.message);
     return mockStore.getClasses();
@@ -45,18 +48,24 @@ export async function createClass(cls: {
   teacher_id?: string;
   owner_id?: string;
 }): Promise<SchoolClass | null> {
+  const localClass = mockStore.addClass(cls);
   if (!isSupabaseConfigured()) {
-    return mockStore.addClass(cls);
+    return localClass;
   }
 
   try {
     const supabase = getSupabase();
-    const payload = {
-      name: cls.name,
+    const payload: any = {
+      name: cls.name.trim(),
       grade: cls.grade,
-      school_year: cls.school_year,
-      teacher_id: cls.teacher_id || cls.owner_id,
+      school_year: cls.school_year || DEFAULT_ACADEMIC_YEAR,
     };
+    if (cls.teacher_id && isUUID(cls.teacher_id)) {
+      payload.teacher_id = cls.teacher_id;
+    } else if (cls.owner_id && isUUID(cls.owner_id)) {
+      payload.teacher_id = cls.owner_id;
+    }
+
     const { data, error } = await supabase
       .from('classes')
       .insert([payload])
@@ -64,17 +73,58 @@ export async function createClass(cls: {
       .single();
 
     if (error) {
-      throw new Error(error.message);
+      console.warn('Supabase class create error, class retained in local store:', error.message);
+      return localClass;
+    }
+    if (data) {
+      mockStore.syncClasses([data]);
+      return data;
+    }
+    return localClass;
+  } catch (err: any) {
+    console.warn('Network error creating class in Supabase, using local store:', err?.message);
+    return localClass;
+  }
+}
+
+export async function createBulkClasses(classList: {
+  name: string;
+  grade: number;
+  school_year: string;
+  teacher_id?: string;
+  owner_id?: string;
+}[]): Promise<SchoolClass[]> {
+  if (!isSupabaseConfigured()) {
+    return mockStore.addBulkClasses(classList);
+  }
+
+  try {
+    const supabase = getSupabase();
+    const payloads = classList.map((cls) => ({
+      name: cls.name,
+      grade: cls.grade,
+      school_year: cls.school_year || DEFAULT_ACADEMIC_YEAR,
+      teacher_id: cls.teacher_id || cls.owner_id,
+    }));
+    const { data, error } = await supabase
+      .from('classes')
+      .insert(payloads)
+      .select();
+
+    if (error || !data) {
+      return mockStore.addBulkClasses(classList);
     }
     return data;
   } catch (err) {
-    return mockStore.addClass(cls);
+    return mockStore.addBulkClasses(classList);
   }
 }
 
 export async function fetchStudents(classId?: string): Promise<Student[]> {
-  if (!isSupabaseConfigured()) {
-    return mockStore.getStudents(classId);
+  const localList = mockStore.getStudents(classId);
+
+  if (!isSupabaseConfigured() || (classId && !isUUID(classId))) {
+    return localList;
   }
 
   try {
@@ -85,7 +135,7 @@ export async function fetchStudents(classId?: string): Promise<Student[]> {
         *,
         class:classes(name)
       `)
-      .order('full_name', { ascending: true });
+      .order('student_code', { ascending: true });
 
     if (classId) {
       query = query.eq('class_id', classId);
@@ -94,16 +144,29 @@ export async function fetchStudents(classId?: string): Promise<Student[]> {
     const { data, error } = await query;
     if (error) {
       console.warn('Supabase query failed, using local store for students:', error.message);
-      return mockStore.getStudents(classId);
+      return localList;
     }
 
-    return (data || []).map((s: any) => ({
+    const remoteStudents: Student[] = (data || []).map((s: any) => ({
       ...s,
       class_name: s.class?.name || 'Chưa phân lớp',
     }));
+
+    // Merge remote and local students, avoiding duplicates
+    const combined = [...remoteStudents];
+    for (const loc of localList) {
+      const exists = combined.some(
+        (r) => r.id === loc.id || (r.student_code && r.student_code.toUpperCase() === loc.student_code.toUpperCase())
+      );
+      if (!exists) {
+        combined.push(loc);
+      }
+    }
+
+    return combined;
   } catch (err: any) {
     console.warn('Network error fetching students, using local store:', err?.message);
-    return mockStore.getStudents(classId);
+    return localList;
   }
 }
 
@@ -141,63 +204,119 @@ export async function lookupStudentByCode(studentCode: string): Promise<Student 
   }
 }
 
-
 export async function addStudentToClass(student: {
   student_code: string;
   full_name: string;
   class_id: string;
   email?: string;
 }): Promise<Student | null> {
-  if (!isSupabaseConfigured()) {
-    return mockStore.addStudent(student);
+  const cleanCode = student.student_code.trim().toUpperCase();
+  const cleanName = student.full_name.trim();
+
+  // Always save locally first so student is guaranteed to be saved
+  const localStudent = mockStore.addStudent({
+    student_code: cleanCode,
+    full_name: cleanName,
+    class_id: student.class_id,
+    email: student.email,
+  });
+
+  if (!isSupabaseConfigured() || !isUUID(student.class_id)) {
+    return localStudent;
   }
 
   try {
     const supabase = getSupabase();
+    // Do not send fields not in Supabase schema (e.g. email)
+    const payload: any = {
+      student_code: cleanCode,
+      full_name: cleanName,
+      class_id: student.class_id,
+    };
     const { data, error } = await supabase
       .from('students')
-      .insert([student])
+      .insert([payload])
       .select()
       .single();
 
     if (error) {
-      throw new Error(error.message);
+      console.warn('Supabase student insert error, retained in local store:', error.message);
+      return localStudent;
     }
     return data;
-  } catch (err) {
-    return mockStore.addStudent(student);
+  } catch (err: any) {
+    console.warn('Error adding student to Supabase, retained in local store:', err?.message);
+    return localStudent;
+  }
+}
+
+export async function addBulkStudents(studentsList: {
+  student_code: string;
+  full_name: string;
+  class_id: string;
+  email?: string;
+}[]): Promise<Student[]> {
+  const localSaved = mockStore.addBulkStudents(studentsList);
+
+  const firstClassId = studentsList[0]?.class_id;
+  if (!isSupabaseConfigured() || !firstClassId || !isUUID(firstClassId)) {
+    return localSaved;
+  }
+
+  try {
+    const supabase = getSupabase();
+    const payloads = studentsList.map((st) => ({
+      student_code: st.student_code.trim().toUpperCase(),
+      full_name: st.full_name.trim(),
+      class_id: st.class_id,
+    }));
+    const { data, error } = await supabase
+      .from('students')
+      .insert(payloads)
+      .select();
+
+    if (error || !data) {
+      console.warn('Supabase bulk student insert error, retained in local store:', error?.message);
+      return localSaved;
+    }
+    return data;
+  } catch (err: any) {
+    console.warn('Network error adding bulk students to Supabase, retained in local store:', err?.message);
+    return localSaved;
   }
 }
 
 export async function deleteClass(classId: string): Promise<boolean> {
-  if (!isSupabaseConfigured()) {
-    return mockStore.deleteClass(classId);
+  mockStore.deleteClass(classId);
+  if (!isSupabaseConfigured() || !isUUID(classId)) {
+    return true;
   }
   try {
     const supabase = getSupabase();
     const { error } = await supabase.from('classes').delete().eq('id', classId);
     if (error) {
-      throw new Error(error.message);
+      console.warn('Error deleting class from Supabase:', error.message);
     }
     return true;
   } catch (err) {
-    return mockStore.deleteClass(classId);
+    return true;
   }
 }
 
 export async function deleteStudent(studentId: string): Promise<boolean> {
-  if (!isSupabaseConfigured()) {
-    return mockStore.deleteStudent(studentId);
+  mockStore.deleteStudent(studentId);
+  if (!isSupabaseConfigured() || !isUUID(studentId)) {
+    return true;
   }
   try {
     const supabase = getSupabase();
     const { error } = await supabase.from('students').delete().eq('id', studentId);
     if (error) {
-      throw new Error(error.message);
+      console.warn('Error deleting student from Supabase:', error.message);
     }
     return true;
   } catch (err) {
-    return mockStore.deleteStudent(studentId);
+    return true;
   }
 }
 

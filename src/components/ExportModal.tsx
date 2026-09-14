@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   FileText,
   Download,
@@ -26,6 +26,7 @@ import {
   exportMatrixToPdf,
   exportFullExamDossierToPdf
 } from '../services/pdfExportService';
+import { mockStore } from '../services/mockStore';
 
 export interface ExportModalProps {
   isOpen: boolean;
@@ -71,9 +72,44 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const currentGrade = resolvedData.grade || 10;
   const currentDuration = resolvedData.durationMinutes || 45;
   const currentStructure = resolvedData.structure;
-  const currentMatrixCells = resolvedData.matrixCells;
-  const currentMatrix = resolvedData.matrix;
   const currentCvData = resolvedData.cvData;
+
+  const [resolvedMatrix, setResolvedMatrix] = useState<any>(resolvedData.matrix || null);
+
+  useEffect(() => {
+    if (resolvedData.matrix) {
+      setResolvedMatrix(resolvedData.matrix);
+      return;
+    }
+    try {
+      const allMatrices = mockStore.getMatrices();
+      if (allMatrices && allMatrices.length > 0) {
+        let m = allMatrices.find(
+          (item) =>
+            (resolvedData.matrix_id && item.id === resolvedData.matrix_id) ||
+            (resolvedData.id && item.exam_id === resolvedData.id)
+        );
+        if (!m && currentTitle) {
+          const cleanTitle = currentTitle.replace(/^Đề thi (định kỳ )?/i, '').trim().toLowerCase();
+          m = allMatrices.find((item) => {
+            const cleanMName = item.name.replace(/^Ma trận & Bảng đặc tả - /i, '').trim().toLowerCase();
+            return cleanTitle.includes(cleanMName) || cleanMName.includes(cleanTitle);
+          });
+        }
+        if (m) {
+          setResolvedMatrix(m);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [resolvedData, currentTitle]);
+
+  const effectiveMatrix = resolvedData.matrix || resolvedMatrix;
+  const effectiveMatrixCells =
+    resolvedData.matrixCells ||
+    (effectiveMatrix as any)?.items ||
+    (effectiveMatrix as any)?.matrix_cells;
 
   const handleExport = async () => {
     if ((docType === 'exam' || docType === 'answers') && (!questionsList || questionsList.length === 0)) {
@@ -107,8 +143,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             title: currentTitle,
             subject: currentSubject,
             grade: currentGrade,
-            matrixCells: currentMatrixCells,
-            matrix: currentMatrix,
+            matrixCells: effectiveMatrixCells,
+            matrix: effectiveMatrix,
             questions: questionsList,
             structure: currentStructure,
             durationMinutes: currentDuration,
@@ -122,8 +158,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             durationMinutes: currentDuration,
             questions: questionsList,
             structure: currentStructure,
-            matrixCells: currentMatrixCells,
-            matrix: currentMatrix,
+            matrixCells: effectiveMatrixCells,
+            matrix: effectiveMatrix,
             cvData: currentCvData,
           });
         }
@@ -150,8 +186,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             title: currentTitle,
             subject: currentSubject,
             grade: currentGrade,
-            matrixCells: currentMatrixCells,
-            matrix: currentMatrix,
+            matrixCells: effectiveMatrixCells,
+            matrix: effectiveMatrix,
             questions: questionsList,
             structure: currentStructure,
             durationMinutes: currentDuration,
@@ -165,8 +201,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             durationMinutes: currentDuration,
             questions: questionsList,
             structure: currentStructure,
-            matrixCells: currentMatrixCells,
-            matrix: currentMatrix,
+            matrixCells: effectiveMatrixCells,
+            matrix: effectiveMatrix,
             cvData: currentCvData,
           });
         }

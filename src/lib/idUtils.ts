@@ -97,3 +97,49 @@ export function normalizeDifficulty(diff: any): Difficulty {
   if (str === 'hard' || str.includes('kho') || str.includes('khó')) return 'hard';
   return 'medium';
 }
+
+/**
+ * Strips topic, chapter, cognitive level, and redundant question prefixes from question content.
+ * e.g. "[Chủ đề: Phương trình] Tìm x..." -> "Tìm x..."
+ * e.g. "(Chủ đề 1: Động học) Một vật..." -> "Một vật..."
+ * e.g. "Chủ đề 1: Động học - Một vật..." -> "Một vật..."
+ * e.g. "Câu 1: Cho hình..." -> "Cho hình..."
+ */
+export function cleanQuestionContent(rawContent: string): string {
+  if (!rawContent) return '';
+  let text = String(rawContent).trim();
+
+  // Strip redundant leading "Câu 1:", "Bài 1:" if present
+  text = text.replace(/^(câu|bài)\s*\d+[\s\.:\-_–—]*/i, '');
+
+  // Strip bracketed topic tags: [Chủ đề ...], [Chương ...], [Bài ...], [Topic ...]
+  text = text.replace(/^\[\s*(chủ\s*đề|chương|bài|chuyên\s*đề|topic|theme)[^\]]*\]\s*[:-]?\s*/i, '');
+  text = text.replace(/^\(\s*(chủ\s*đề|chương|bài|chuyên\s*đề|topic|theme)[^\)]*\)\s*[:-]?\s*/i, '');
+
+  // Strip unbracketed topic prefixes: "Chủ đề 1: ... - " or "Chủ đề: ...: "
+  text = text.replace(/^(chủ\s*đề|chương|chuyên\s*đề)\s*[\dIVXabc\.\:]*[^:\n–—-]*[:–—-]\s*/i, '');
+
+  // Strip bracketed cognitive level tags: [Biết], [Hiểu], [Vận dụng], [Nhận biết], etc.
+  text = text.replace(/^\[\s*(nhận\s*biết|thông\s*hiểu|vận\s*dụng|vận\s*dụng\s*cao|biết|hiểu|mức\s*độ\s*\d)[^\]]*\]\s*[:-]?\s*/i, '');
+  text = text.replace(/^\(\s*(nhận\s*biết|thông\s*hiểu|vận\s*dụng|vận\s*dụng\s*cao|biết|hiểu|mức\s*độ\s*\d)[^\)]*\)\s*[:-]?\s*/i, '');
+
+  // Strip again in case there was both topic and level: e.g. "[Chủ đề 1] [Thông hiểu] Cho hình..."
+  text = text.replace(/^\[\s*(nhận\s*biết|thông\s*hiểu|vận\s*dụng|vận\s*dụng\s*cao|biết|hiểu|mức\s*độ\s*\d)[^\]]*\]\s*[:-]?\s*/i, '');
+  text = text.replace(/^\(\s*(nhận\s*biết|thông\s*hiểu|vận\s*dụng|vận\s*dụng\s*cao|biết|hiểu|mức\s*độ\s*\d)[^\)]*\)\s*[:-]?\s*/i, '');
+
+  return text.trim();
+}
+
+/**
+ * Automatically generates a standardized student code based on class name and sequence number (STT).
+ * e.g.:
+ * - className: "6/1", stt: 1 -> "6/101"
+ * - className: "6/1", stt: 15 -> "6/115"
+ * - className: "6A", stt: 1 -> "6A01"
+ * - className: "10A1", stt: 5 -> "10A105"
+ */
+export function generateStudentCode(className: string, stt: number): string {
+  const cleanClass = (className || '').trim();
+  const paddedStt = String(Math.max(1, stt)).padStart(2, '0');
+  return `${cleanClass}${paddedStt}`.toUpperCase();
+}

@@ -1506,6 +1506,13 @@ class AIExamService {
             cognitive_level: normalizedCog,
             points: Math.max(0, Number(aiQ.points) || 1.0),
             explanation: fullExplanation.trim(),
+            topic: aiQ.topic,
+            content_unit: aiQ.content_unit,
+            learning_requirement: aiQ.learning_requirement,
+            exam_part: aiQ.exam_part,
+            statements: aiQ.statements,
+            short_answer: aiQ.short_answer,
+            essay_rubric: aiQ.essay_rubric,
           },
           optionsToSave
         );

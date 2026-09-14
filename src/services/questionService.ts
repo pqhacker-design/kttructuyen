@@ -178,6 +178,14 @@ export async function createQuestion(
     cognitive_level: CognitiveLevel;
     explanation?: string;
     points: number;
+    topic?: string;
+    content_unit?: string;
+    learning_requirement?: string;
+    exam_part?: number;
+    statements?: any;
+    short_answer?: any;
+    essay_rubric?: any;
+    [key: string]: any;
   },
   options: { content: string; is_correct: boolean; option_order: number }[]
 ): Promise<Question | null> {

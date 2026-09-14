@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { 
   FileText, 
   Plus, 
@@ -57,25 +57,69 @@ export const ExamManagementView: React.FC<ExamManagementViewProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
+  // Find linked matrix for previewExam
+  const matchedMatrix = useMemo(() => {
+    if (!previewExam) return null;
+    let m = matrices.find(
+      (item) =>
+        (previewExam.matrix_id && item.id === previewExam.matrix_id) ||
+        (item.exam_id && item.exam_id === previewExam.id)
+    );
+    if (!m && previewExam.title) {
+      const cleanExamTitle = previewExam.title
+        .replace(/^Đề thi (định kỳ )?/i, '')
+        .trim()
+        .toLowerCase();
+      m = matrices.find((item) => {
+        const cleanMName = item.name
+          .replace(/^Ma trận & Bảng đặc tả - /i, '')
+          .trim()
+          .toLowerCase();
+        return (
+          cleanExamTitle.includes(cleanMName) ||
+          cleanMName.includes(cleanExamTitle)
+        );
+      });
+    }
+    return m || null;
+  }, [previewExam, matrices]);
+
   // Helper to normalize questions for ExportModal
   const getExportQuestions = (): any[] => {
     if (!detailedExam?.questions) return [];
     return detailedExam.questions.map((item: any, idx: number) => {
       const q = item.question || item;
+      const rawType = String(q.question_type || '').toLowerCase();
+      const isMC = rawType === 'single_choice' || rawType === 'multiple_choice' || rawType.includes('choice');
+      const isTF = rawType === 'true_false' || rawType.includes('dung_sai') || rawType.includes('đúng sai');
+      const isSA = rawType === 'short_answer' || rawType.includes('ngan') || rawType.includes('ngắn');
+      const isEssay = rawType === 'essay' || rawType.includes('tu_luan') || rawType.includes('tự luận');
+
+      let calculatedPart = q.exam_part;
+      if (!calculatedPart) {
+        if (isMC) calculatedPart = 1;
+        else if (isTF) calculatedPart = 2;
+        else if (isSA) calculatedPart = 3;
+        else if (isEssay) calculatedPart = 4;
+        else calculatedPart = 1;
+      }
+
       return {
         id: q.id || `q-${idx + 1}`,
-        question_order: item.question_order || idx + 1,
-        exam_part: q.exam_part || (q.question_type === 'single_choice' ? 1 : q.question_type === 'true_false' ? 2 : q.question_type === 'short_answer' ? 3 : 4),
+        question_order: item.question_order || q.question_order || idx + 1,
+        exam_part: calculatedPart,
         part_title: q.part_title,
-        question_type: q.question_type || 'single_choice',
+        question_type: q.question_type || (isMC ? 'single_choice' : isTF ? 'true_false' : isSA ? 'short_answer' : 'essay'),
         cognitive_level: q.cognitive_level || 'recognition',
-        topic: q.topic || 'Tổng hợp',
+        topic: q.topic || (matchedMatrix ? matchedMatrix.name : ''),
+        content_unit: q.content_unit || q.subtopic || '',
+        learning_requirement: q.learning_requirement || '',
         content: q.content || '',
-        points: item.points || q.points || 1,
+        points: item.points !== undefined ? item.points : (q.points || (calculatedPart === 1 ? 0.25 : calculatedPart === 2 ? 1.0 : calculatedPart === 3 ? 0.5 : 1.5)),
         options: q.options || [],
         statements: (q.statements && q.statements.length > 0)
           ? q.statements
-          : ((q.question_type === 'true_false' || q.exam_part === 2) && q.options)
+          : ((isTF || calculatedPart === 2) && q.options)
             ? q.options.map((opt: any, sIdx: number) => ({
                 id: opt.id || `st-${sIdx}`,
                 statement: opt.content || opt.statement || opt.text || '',
@@ -943,6 +987,8 @@ export const ExamManagementView: React.FC<ExamManagementViewProps> = ({
             grade: previewExam.grade || 10,
             durationMinutes: previewExam.duration_minutes || 45,
             questions: getExportQuestions(),
+            matrix: matchedMatrix || undefined,
+            matrixCells: (matchedMatrix as any)?.items || (matchedMatrix as any)?.matrix_cells || undefined,
           }}
         />
       )}

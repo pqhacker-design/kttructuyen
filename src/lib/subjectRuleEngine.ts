@@ -1236,6 +1236,98 @@ export class SubjectRuleEngine {
   public static getCurriculumTopics(subjectId: SubjectCode, grade: number): { topic: string; units: string[] }[] {
     // Standard GDPT 2018 topic units database
     if (subjectId === 'toan') {
+      if (grade === 6) {
+        return [
+          {
+            topic: 'Số tự nhiên và các phép tính',
+            units: ['Tập hợp các số tự nhiên', 'Các phép tính cộng, trừ, nhân, chia', 'Luỹ thừa với số mũ tự nhiên', 'Chia hết và ước chung, bội chung'],
+          },
+          {
+            topic: 'Số nguyên và tính chia hết',
+            units: ['Số nguyên âm và tập hợp các số nguyên', 'Các phép tính với số nguyên', 'Quy tắc dấu ngoặc và bội - ước của một số nguyên'],
+          },
+          {
+            topic: 'Hình học trực quan và tính đối xứng',
+            units: ['Tam giác đều, hình vuông, lục giác đều', 'Hình chữ nhật, hình thoi, hình bình hành, hình thang cân', 'Hình có trục đối xứng và tâm đối xứng'],
+          },
+          {
+            topic: 'Phân số và số thập phân',
+            units: ['Khái niệm phân số và tính chất cơ bản', 'Các phép tính với phân số', 'Số thập phân và các phép tính với số thập phân', 'Tỉ số và tỉ số phần trăm'],
+          },
+        ];
+      }
+      if (grade === 7) {
+        return [
+          {
+            topic: 'Số hữu tỉ và Số thực',
+            units: ['Tập hợp số hữu tỉ và các phép tính', 'Số thập phân hữu hạn và vô hạn tuần hoàn', 'Căn bậc hai số học và số vô tỉ', 'Tập hợp các số thực và giá trị tuyệt đối'],
+          },
+          {
+            topic: 'Số đo góc và Hai đường thẳng song song',
+            units: ['Góc ở vị trí đặc biệt, tia phân giác', 'Hai đường thẳng song song và dấu hiệu nhận biết', 'Định lí và chứng minh định lí'],
+          },
+          {
+            topic: 'Tam giác bằng nhau và các đường đồng quy',
+            units: ['Tổng ba góc của một tam giác', 'Các trường hợp bằng nhau của tam giác', 'Tam giác cân, tam giác đều', 'Đường trung trực, đường cao, trung tuyến và phân giác trong tam giác'],
+          },
+          {
+            topic: 'Biểu thức đại số và Đa thức một biến',
+            units: ['Biểu thức đại số', 'Đa thức một biến và nghiệm của đa thức', 'Các phép tính cộng, trừ, nhân, chia đa thức một biến'],
+          },
+        ];
+      }
+      if (grade === 8) {
+        return [
+          {
+            topic: 'Đa thức nhiều biến và Hằng đẳng thức đáng nhớ',
+            units: ['Đơn thức và đa thức nhiều biến', 'Các hằng đẳng thức đáng nhớ', 'Phân tích đa thức thành nhân tử'],
+          },
+          {
+            topic: 'Phân thức đại số',
+            units: ['Khái niệm phân thức đại số', 'Cộng, trừ phân thức đại số', 'Nhân, chia phân thức đại số'],
+          },
+          {
+            topic: 'Hàm số bậc nhất và đồ thị',
+            units: ['Khái niệm hàm số', 'Hàm số bậc nhất y = ax + b', 'Đồ thị và hệ số góc của đường thẳng'],
+          },
+          {
+            topic: 'Tứ giác và các hình học phẳng đặc biệt',
+            units: ['Tứ giác và định lí tổng các góc', 'Hình thang cân, hình bình hành', 'Hình chữ nhật, hình thoi, hình vuông'],
+          },
+          {
+            topic: 'Định lí Thalès và Tam giác đồng dạng',
+            units: ['Định lí Thalès trong tam giác', 'Đường trung bình của tam giác', 'Các trường hợp đồng dạng của tam giác'],
+          },
+        ];
+      }
+      if (grade === 9) {
+        return [
+          {
+            topic: 'Phương trình và Hệ hai phương trình bậc nhất hai ẩn',
+            units: ['Phương trình bậc nhất hai ẩn', 'Hệ hai phương trình bậc nhất hai ẩn', 'Giải toán bằng cách lập hệ phương trình'],
+          },
+          {
+            topic: 'Phương trình bậc hai một ẩn và Hệ thức Vi-ét',
+            units: ['Phương trình bậc hai một ẩn', 'Công thức nghiệm và nghiệm thu gọn', 'Hệ thức Vi-ét và ứng dụng', 'Giải bài toán bằng cách lập phương trình'],
+          },
+          {
+            topic: 'Hàm số y = ax² (a ≠ 0) và Đồ thị',
+            units: ['Tính chất biến thiên của hàm số y = ax²', 'Đồ thị hàm số y = ax²', 'Tương giao giữa parabol và đường thẳng'],
+          },
+          {
+            topic: 'Căn bậc hai và Căn bậc ba',
+            units: ['Căn bậc hai và hằng đẳng thức căn', 'Liên hệ giữa phép nhân, chia và phép khai phương', 'Biến đổi đơn giản biểu thức chứa căn bậc hai', 'Căn bậc ba'],
+          },
+          {
+            topic: 'Hệ thức lượng trong tam giác vuông',
+            units: ['Hệ thức giữa cạnh và đường cao', 'Tỉ số lượng giác của góc nhọn', 'Một số hệ thức về cạnh và góc trong tam giác vuông'],
+          },
+          {
+            topic: 'Đường tròn và Góc với đường tròn',
+            units: ['Sự xác định đường tròn và tính chất đối xứng', 'Dây và khoảng cách từ tâm đến dây', 'Vị trí tương đối của đường thẳng và đường tròn', 'Góc ở tâm, góc nội tiếp và góc tạo bởi tia tiếp tuyến và dây cung'],
+          },
+        ];
+      }
       if (grade === 10) {
         return [
           {

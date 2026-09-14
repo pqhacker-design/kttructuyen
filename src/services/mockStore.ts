@@ -13,7 +13,8 @@ import {
   ExamAttempt, 
   AttemptAnswer, 
   ExamResult, 
-  Profile 
+  Profile,
+  DEFAULT_ACADEMIC_YEAR
 } from '../types';
 
 const STORAGE_KEY = 'eduexam_production_store_v1';
@@ -204,9 +205,10 @@ export const mockStore = {
 
   // Classes & Students
   getClasses: (): SchoolClass[] => [...storeState.classes],
-  addClass: (cls: { name: string; grade: number; school_year: string }): SchoolClass => {
+  addClass: (cls: { name: string; grade: number; school_year?: string }): SchoolClass => {
     const newClass: SchoolClass = {
       ...cls,
+      school_year: cls.school_year || DEFAULT_ACADEMIC_YEAR,
       id: uniqueId('class'),
       student_count: 0,
       created_at: new Date().toISOString(),
@@ -215,6 +217,23 @@ export const mockStore = {
     storeState.classes.push(newClass);
     persistStore();
     return newClass;
+  },
+  addBulkClasses: (classList: { name: string; grade: number; school_year?: string }[]): SchoolClass[] => {
+    const created: SchoolClass[] = [];
+    for (const cls of classList) {
+      const newClass: SchoolClass = {
+        ...cls,
+        school_year: cls.school_year || DEFAULT_ACADEMIC_YEAR,
+        id: uniqueId('class'),
+        student_count: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      storeState.classes.push(newClass);
+      created.push(newClass);
+    }
+    persistStore();
+    return created;
   },
   deleteClass: (id: string): boolean => {
     storeState.classes = storeState.classes.filter(c => c.id !== id);
@@ -233,10 +252,44 @@ export const mockStore = {
     if (!clean) return null;
     return storeState.students.find(s => s.student_code.trim().toUpperCase() === clean) || null;
   },
-  addStudent: (st: { student_code: string; full_name: string; class_id: string }): Student => {
+  syncClasses: (remoteClasses: SchoolClass[]) => {
+    for (const remote of remoteClasses) {
+      const idx = storeState.classes.findIndex(c => c.id === remote.id);
+      if (idx >= 0) {
+        storeState.classes[idx] = { ...storeState.classes[idx], ...remote };
+      } else {
+        storeState.classes.push(remote);
+      }
+    }
+    persistStore();
+  },
+  addStudent: (st: { student_code: string; full_name: string; class_id: string; email?: string }): Student => {
     const foundClass = storeState.classes.find(c => c.id === st.class_id);
+    const cleanCode = st.student_code.trim().toUpperCase();
+    const cleanName = st.full_name.trim();
+    
+    // Check if student with same code in class already exists
+    const existingIdx = storeState.students.findIndex(
+      s => s.class_id === st.class_id && s.student_code.trim().toUpperCase() === cleanCode
+    );
+
+    if (existingIdx >= 0) {
+      const updated: Student = {
+        ...storeState.students[existingIdx],
+        full_name: cleanName,
+        email: st.email || storeState.students[existingIdx].email,
+        class_name: foundClass?.name || storeState.students[existingIdx].class_name || '',
+        updated_at: new Date().toISOString(),
+      };
+      storeState.students[existingIdx] = updated;
+      persistStore();
+      return updated;
+    }
+
     const newStudent: Student = {
       ...st,
+      student_code: cleanCode,
+      full_name: cleanName,
       id: uniqueId('student'),
       class_name: foundClass?.name || '',
       created_at: new Date().toISOString(),
@@ -248,6 +301,47 @@ export const mockStore = {
     }
     persistStore();
     return newStudent;
+  },
+  addBulkStudents: (studentsList: { student_code: string; full_name: string; class_id: string; email?: string }[]): Student[] => {
+    const created: Student[] = [];
+    for (const st of studentsList) {
+      const foundClass = storeState.classes.find(c => c.id === st.class_id);
+      const cleanCode = st.student_code.trim().toUpperCase();
+      const cleanName = st.full_name.trim();
+
+      const existingIdx = storeState.students.findIndex(
+        s => s.class_id === st.class_id && s.student_code.trim().toUpperCase() === cleanCode
+      );
+
+      if (existingIdx >= 0) {
+        const updated: Student = {
+          ...storeState.students[existingIdx],
+          full_name: cleanName,
+          email: st.email || storeState.students[existingIdx].email,
+          class_name: foundClass?.name || storeState.students[existingIdx].class_name || '',
+          updated_at: new Date().toISOString(),
+        };
+        storeState.students[existingIdx] = updated;
+        created.push(updated);
+      } else {
+        const newStudent: Student = {
+          ...st,
+          student_code: cleanCode,
+          full_name: cleanName,
+          id: uniqueId('student'),
+          class_name: foundClass?.name || '',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        storeState.students.push(newStudent);
+        if (foundClass) {
+          foundClass.student_count = (foundClass.student_count || 0) + 1;
+        }
+        created.push(newStudent);
+      }
+    }
+    persistStore();
+    return created;
   },
   deleteStudent: (id: string): boolean => {
     const st = storeState.students.find(s => s.id === id);
