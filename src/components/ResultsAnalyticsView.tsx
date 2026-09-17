@@ -38,6 +38,7 @@ import {
   allowStudentRetake,
   fetchAttemptAuditLog
 } from '../services/resultService';
+import { mockStore } from '../services/mockStore';
 import { ExamAuditLogModal } from './ExamAuditLogModal';
 
 interface ResultsAnalyticsViewProps {
@@ -205,6 +206,9 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
       const attemptId = retakeTarget.attempt_id;
       await allowStudentRetake(selectedSessionId, studentCode, attemptId);
 
+      // Local mockStore reset (in case student logs in on same browser/device)
+      mockStore.resetStudentAttempt(selectedSessionId, studentCode, attemptId);
+
       const updated = results.filter(
         (r) => r.id !== retakeTarget.id && r.attempt_id !== retakeTarget.attempt_id
       );
@@ -245,6 +249,11 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
     setIsDeleting(true);
     try {
       await deleteExamResult(selectedSessionId, deleteTarget.id, deleteTarget.attempt_id);
+
+      // Also reset student attempt eligibility so student can retake if needed
+      if (deleteTarget.student_code) {
+        mockStore.resetStudentAttempt(selectedSessionId, deleteTarget.student_code, deleteTarget.attempt_id);
+      }
 
       const updated = results.filter(
         (r) => r.id !== deleteTarget.id && r.attempt_id !== deleteTarget.attempt_id
@@ -441,11 +450,11 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
                   <th className="p-3 text-center">Hạng</th>
                   <th className="p-3">Mã HS / SBD</th>
                   <th className="p-3">Họ và tên thí sinh</th>
-                  <th className="p-3 text-center">Điểm số</th>
+                  <th className="p-3 text-center min-w-[130px] w-36 whitespace-nowrap">Điểm số</th>
                   <th className="p-3 text-center">Tỷ lệ</th>
                   <th className="p-3 text-center">Đúng / Sai</th>
                   <th className="p-3 text-right">Thời gian nộp</th>
-                  <th className="p-3 text-center">Thao tác</th>
+                  <th className="p-3 text-center min-w-[110px] w-28 whitespace-nowrap">Thao tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -462,8 +471,8 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
                       <td className="p-3 font-semibold text-slate-900">
                         {r.student_name}
                       </td>
-                      <td className="p-3 text-center">
-                        <span className={`px-2.5 py-1 rounded-lg font-bold text-xs ${
+                      <td className="p-3 text-center min-w-[130px] w-36 whitespace-nowrap">
+                        <span className={`inline-flex items-center justify-center px-3 py-1.5 rounded-lg font-bold text-xs whitespace-nowrap shadow-2xs ${
                           isPassed
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : 'bg-rose-50 text-rose-700 border border-rose-200'
@@ -482,17 +491,17 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
                       <td className="p-3 text-right text-slate-500">
                         {r.submitted_at ? new Date(r.submitted_at).toLocaleString('vi-VN') : '---'}
                       </td>
-                      <td className="p-3 text-center">
+                      <td className="p-3 text-center min-w-[110px] w-28 whitespace-nowrap">
                         <div className="flex items-center justify-center space-x-1.5">
                           {/* Cho làm lại */}
                           <button
                             type="button"
                             onClick={() => handleOpenRetakeModal(r)}
                             title="Cho học sinh làm lại bài thi"
-                            className="inline-flex items-center space-x-1 px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 rounded-lg transition-colors cursor-pointer"
+                            aria-label="Cho làm lại"
+                            className="p-1.5 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 hover:text-indigo-900 border border-indigo-200/80 rounded-lg transition-colors cursor-pointer shadow-2xs"
                           >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            <span>Cho làm lại</span>
+                            <RotateCcw className="w-4 h-4" />
                           </button>
 
                           {/* Xem nhật ký thi */}
@@ -500,10 +509,10 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
                             type="button"
                             onClick={() => handleOpenAuditModal(r)}
                             title="Xem nhật ký bài làm & chi tiết bài thi"
-                            className="inline-flex items-center space-x-1 px-2.5 py-1 text-xs font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200/80 rounded-lg transition-colors cursor-pointer"
+                            aria-label="Xem nhật ký"
+                            className="p-1.5 text-sky-700 bg-sky-50 hover:bg-sky-100 hover:text-sky-900 border border-sky-200/80 rounded-lg transition-colors cursor-pointer shadow-2xs"
                           >
-                            <FileText className="w-3.5 h-3.5" />
-                            <span>Xem nhật ký</span>
+                            <FileText className="w-4 h-4" />
                           </button>
 
                           {/* Xóa kết quả */}
@@ -511,10 +520,10 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
                             type="button"
                             onClick={() => handleOpenDeleteModal(r)}
                             title="Xóa kết quả thi của thí sinh"
-                            className="inline-flex items-center space-x-1 px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/80 rounded-lg transition-colors cursor-pointer"
+                            aria-label="Xóa kết quả"
+                            className="p-1.5 text-rose-700 bg-rose-50 hover:bg-rose-100 hover:text-rose-900 border border-rose-200/80 rounded-lg transition-colors cursor-pointer shadow-2xs"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Xóa</span>
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       </td>

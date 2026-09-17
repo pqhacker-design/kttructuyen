@@ -372,7 +372,10 @@ export const ExamTakingView: React.FC<ExamTakingViewProps> = ({
   // SUBMITTED RESULT VIEW WITH QUESTION-BY-QUESTION REVIEW
   // ----------------------------------------------------------------------------
   if (examResult) {
-    const reviewList = examResult.review_questions || [];
+    const fullReviewList = examResult.review_questions || [];
+    // User request: "Khi HS nộp bài, Chỉ hiển thị câu hỏi và đáp án của câu hỏi đã làm, các câu chưa làm thì không hiển thị."
+    const reviewList = fullReviewList.filter((rq: any) => rq.is_answered === true);
+    const hiddenCount = fullReviewList.length - reviewList.length;
 
     return (
       <div className="max-w-4xl mx-auto py-8 px-4 space-y-6">
@@ -443,22 +446,40 @@ export const ExamTakingView: React.FC<ExamTakingViewProps> = ({
         </div>
 
         {/* Question Review Section (Detailed Answers) */}
-        {session?.show_result_after_submit && reviewList.length > 0 && (
+        {session?.show_result_after_submit && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between px-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-2">
               <div>
                 <h3 className="text-lg font-bold text-slate-900">Chi tiết bài làm & Đáp án</h3>
                 <p className="text-xs text-slate-500">
-                  Theo quy định: Câu bạn đã làm sẽ hiển thị đáp án và lời giải chi tiết. Câu không làm sẽ không hiển thị đáp án.
+                  Chỉ hiển thị câu hỏi và đáp án của các câu bạn đã làm. Các câu chưa làm không hiển thị theo quy chế thi.
                 </p>
               </div>
-              <span className="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg border border-indigo-200">
-                {reviewList.length} câu hỏi
-              </span>
+              <div className="flex items-center space-x-2 shrink-0">
+                <span className="text-xs font-semibold px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg border border-indigo-200">
+                  {reviewList.length} câu đã làm
+                </span>
+                {hiddenCount > 0 && (
+                  <span className="text-xs font-medium px-2.5 py-1 bg-slate-100 text-slate-600 rounded-lg border border-slate-200">
+                    Đã ẩn {hiddenCount} câu chưa làm
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className="space-y-4">
-              {reviewList.map((rq, idx) => {
+            {reviewList.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-2">
+                <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto">
+                  <EyeOff className="w-6 h-6" />
+                </div>
+                <h4 className="text-base font-bold text-slate-800">Không có câu hỏi hiển thị</h4>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Theo quy định thi, chỉ hiển thị câu hỏi và đáp án đối với những câu học sinh đã thực hiện bài làm. Bạn chưa làm câu nào nên danh sách này để trống.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {reviewList.map((rq, idx) => {
                 const isTF = rq.question_type === 'true_false' || Boolean(rq.statements && rq.statements.length > 0);
                 const isShortAnswer = rq.question_type === 'short_answer';
                 const isEssay = rq.question_type === 'essay';
@@ -800,6 +821,7 @@ export const ExamTakingView: React.FC<ExamTakingViewProps> = ({
                 );
               })}
             </div>
+            )}
           </div>
         )}
       </div>

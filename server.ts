@@ -16,6 +16,7 @@ import {
 } from './server/admin';
 import { runUserIsolationTestSuite } from './server/testSuite';
 import { safeParseAIJson } from './src/lib/jsonRepairHelper';
+import { serverExamStore } from './server/examStore';
 
 dotenv.config();
 
@@ -1015,7 +1016,60 @@ app.get('/api/exam-access/:code', async (req, res) => {
       }
     }
 
-    // Local / fallback resolver for code
+    // Local / fallback resolver for code using serverExamStore
+    const memSession = serverExamStore.getSessionByCode(code);
+    if (memSession) {
+      const exam: any = serverExamStore.getExam(memSession.exam_id) || {
+        id: memSession.exam_id,
+        title: memSession.title,
+        duration_minutes: memSession.duration_minutes,
+        total_points: 10,
+        questions: [],
+      };
+      const rawQuestions = exam?.questions || [];
+      const sanitizedQuestions = rawQuestions.map((q: any) => ({
+        id: q.id,
+        content: q.content,
+        question_type: q.question_type,
+        exam_part: q.exam_part,
+        points: q.points,
+        cognitive_level: q.cognitive_level,
+        options: (q.options || []).map((opt: any) => ({
+          id: opt.id,
+          content: opt.content,
+          option_order: opt.option_order,
+        })),
+        statements: (q.statements || []).map((st: any) => ({
+          id: st.id,
+          statement: st.statement,
+        })),
+        sub_items: q.sub_items,
+      }));
+
+      return res.json({
+        success: true,
+        found: true,
+        session: {
+          id: memSession.id,
+          title: memSession.title,
+          access_code: memSession.access_code,
+          duration_minutes: memSession.duration_minutes,
+          max_attempts: memSession.max_attempts || 1,
+          status: memSession.status,
+          show_result_after_submit: memSession.show_result_after_submit !== false,
+          shuffle_questions: Boolean(memSession.shuffle_questions),
+          shuffle_options: Boolean(memSession.shuffle_options),
+        },
+        exam: {
+          id: exam.id,
+          title: exam.title,
+          duration_minutes: exam.duration_minutes,
+          total_points: exam.total_points,
+        },
+        questions: sanitizedQuestions,
+      });
+    }
+
     res.json({
       success: true,
       found: false,
@@ -1023,6 +1077,286 @@ app.get('/api/exam-access/:code', async (req, res) => {
       message: 'Mã phòng thi hợp lệ trong chuẩn cấu hình hệ thống. Hệ thống phòng thi sẵn sàng.',
     });
   } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/exam-sessions/sync - Sync session, exam, and answer keys to server
+app.post('/api/exam-sessions/sync', (req, res) => {
+  try {
+    const { session, exam, questions } = req.body;
+    if (session) {
+      serverExamStore.saveSession(session, exam, questions);
+    }
+    res.json({ success: true, message: 'Đồng bộ phòng thi lên máy chủ thành công' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/exam-sessions/join - Cross-browser student join & eligibility verification
+app.post('/api/exam-sessions/join', async (req, res) => {
+  try {
+    const { accessCode, studentName, studentCode } = req.body;
+    const cleanCode = (accessCode || '').trim().toUpperCase();
+    const cleanStudentCode = (studentCode || '').trim().toUpperCase();
+    const cleanStudentName = (studentName || '').trim();
+
+    if (!cleanCode || !cleanStudentName || !cleanStudentCode) {
+      return res.status(400).json({ success: false, error: 'Vui lòng nhập đầy đủ họ tên, mã học sinh và mã phòng thi.' });
+    }
+
+    const admin = getSupabaseAdmin();
+    let session: any = null;
+    let exam: any = null;
+    let questions: any[] = [];
+
+    if (admin) {
+      const { data: accessCodeData } = await admin
+        .from('access_codes')
+        .select('*, exam_sessions(*)')
+        .eq('code', cleanCode)
+        .maybeSingle();
+
+      session = accessCodeData?.exam_sessions;
+      if (!session) {
+        const { data: sessionData } = await admin
+          .from('exam_sessions')
+          .select('*')
+          .eq('access_code', cleanCode)
+          .maybeSingle();
+        session = sessionData;
+      }
+
+      if (session) {
+        const { data: ex } = await admin.from('exams').select('*').eq('id', session.exam_id).maybeSingle();
+        exam = ex;
+        const { data: eqs } = await admin
+          .from('exam_questions')
+          .select('*, questions(*)')
+          .eq('exam_id', session.exam_id)
+          .order('order_index', { ascending: true });
+
+        questions = (eqs || []).map((eq: any) => eq.questions).filter(Boolean);
+      }
+    }
+
+    // Fallback to serverExamStore
+    if (!session) {
+      session = serverExamStore.getSessionByCode(cleanCode);
+      if (session) {
+        exam = serverExamStore.getExam(session.exam_id) || {
+          id: session.exam_id,
+          title: session.title,
+          duration_minutes: session.duration_minutes,
+          total_points: 10,
+        };
+        questions = exam?.questions || [];
+      }
+    }
+
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        code: 'SESSION_NOT_FOUND',
+        error: `Không tìm thấy phòng thi với mã "${cleanCode}". Vui lòng kiểm tra lại.`,
+      });
+    }
+
+    if (session.status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        code: 'SESSION_INACTIVE',
+        error: 'Phòng thi này chưa mở hoặc đã kết thúc.',
+      });
+    }
+
+    // Check if teacher explicitly allowed retake for this student
+    const isRetakeAllowed = serverExamStore.isStudentAllowedRetake(session.id, cleanStudentCode);
+
+    if (!isRetakeAllowed) {
+      // Check prior submitted attempts
+      let submittedCount = 0;
+      let lastAttemptData: any = null;
+
+      if (admin) {
+        const { data: pastAttempts } = await admin
+          .from('exam_attempts')
+          .select('*')
+          .eq('exam_session_id', session.id)
+          .ilike('student_code', cleanStudentCode)
+          .in('status', ['submitted', 'graded']);
+
+        submittedCount = (pastAttempts || []).length;
+        if (pastAttempts && pastAttempts.length > 0) {
+          lastAttemptData = pastAttempts[pastAttempts.length - 1];
+        }
+      }
+
+      const memAttempts = serverExamStore.getAttemptsByStudent(session.id, cleanStudentCode);
+      const memSubmitted = memAttempts.filter((a) => a.status === 'submitted' || a.status === 'graded');
+      submittedCount = Math.max(submittedCount, memSubmitted.length);
+      if (!lastAttemptData && memSubmitted.length > 0) {
+        lastAttemptData = memSubmitted[memSubmitted.length - 1];
+      }
+
+      const maxAttempts = session.max_attempts || 1;
+      if (submittedCount >= maxAttempts) {
+        return res.status(403).json({
+          success: false,
+          code: 'MAX_ATTEMPTS_REACHED',
+          error: `Bạn đã tham gia đủ số lần cho phép (${maxAttempts} lần). Điểm số bài thi của bạn đã được ghi nhận trong bảng thống kê của giáo viên.`,
+          lastAttempt: lastAttemptData
+            ? {
+                score: lastAttemptData.score,
+                max_score: lastAttemptData.max_score,
+                percentage: lastAttemptData.percentage,
+                submitted_at: lastAttemptData.submitted_at,
+                status: lastAttemptData.status,
+              }
+            : undefined,
+        });
+      }
+    }
+
+    // Create attempt in serverExamStore
+    const newAttempt = serverExamStore.createAttempt(session.id, cleanStudentName, cleanStudentCode);
+
+    // Also insert attempt into Supabase if admin is available
+    if (admin) {
+      try {
+        await admin.from('exam_attempts').insert({
+          id: newAttempt.id,
+          exam_session_id: session.id,
+          student_name: cleanStudentName,
+          student_code: cleanStudentCode,
+          attempt_number: 1,
+          started_at: newAttempt.started_at,
+          status: 'in_progress',
+        });
+      } catch (dbErr) {
+        console.warn('Could not insert attempt into Supabase:', dbErr);
+      }
+    }
+
+    // Sanitize questions for student
+    const sanitizedQuestions = questions.map((q: any) => ({
+      id: q.id,
+      content: q.content,
+      question_type: q.question_type,
+      exam_part: q.exam_part,
+      points: q.points,
+      cognitive_level: q.cognitive_level,
+      options: (q.options || []).map((opt: any) => ({
+        id: opt.id,
+        content: opt.content,
+        option_order: opt.option_order,
+      })),
+      statements: (q.statements || []).map((st: any) => ({
+        id: st.id,
+        statement: st.statement,
+      })),
+      sub_items: q.sub_items,
+    }));
+
+    return res.json({
+      success: true,
+      session: {
+        id: session.id,
+        title: session.title,
+        access_code: session.access_code,
+        duration_minutes: session.duration_minutes,
+        max_attempts: session.max_attempts || 1,
+        status: session.status,
+        show_result_after_submit: session.show_result_after_submit !== false,
+        shuffle_questions: Boolean(session.shuffle_questions),
+        shuffle_options: Boolean(session.shuffle_options),
+      },
+      exam: {
+        id: exam?.id || session.exam_id,
+        title: exam?.title || session.title,
+        duration_minutes: exam?.duration_minutes || session.duration_minutes,
+        total_points: exam?.total_points || 10,
+      },
+      questions: sanitizedQuestions,
+      attempt: newAttempt,
+      isRetakeAllowed,
+    });
+  } catch (err: any) {
+    console.error('Error joining exam session on server:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/exam-sessions/:sessionId/submit - Accurate server-side grading engine
+app.post('/api/exam-sessions/:sessionId/submit', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { attemptId, answers, studentName, studentCode } = req.body;
+
+    if (!attemptId) {
+      return res.status(400).json({ success: false, error: 'Thiếu attemptId' });
+    }
+
+    const grading = serverExamStore.gradeAndSubmit(
+      attemptId,
+      sessionId,
+      answers || {},
+      studentName,
+      studentCode
+    );
+
+    if (!grading.success || !grading.result) {
+      return res.status(400).json({
+        success: false,
+        error: grading.message || 'Lỗi khi chấm điểm bài thi trên máy chủ',
+      });
+    }
+
+    const result = grading.result;
+
+    // Persist to Supabase if admin is configured
+    const admin = getSupabaseAdmin();
+    if (admin) {
+      try {
+        await admin
+          .from('exam_attempts')
+          .update({
+            status: 'graded',
+            submitted_at: result.submitted_at,
+            score: result.score,
+            max_score: result.max_score,
+            percentage: result.percentage,
+          })
+          .eq('id', attemptId);
+
+        await admin.from('exam_results').upsert(
+          {
+            attempt_id: attemptId,
+            exam_session_id: sessionId,
+            student_name: result.student_name,
+            student_code: result.student_code,
+            score: result.score,
+            max_score: result.max_score,
+            percentage: result.percentage,
+            correct_count: result.correct_count,
+            wrong_count: result.wrong_count,
+            unanswered_count: result.unanswered_count,
+            submitted_at: result.submitted_at,
+          },
+          { onConflict: 'attempt_id' }
+        );
+      } catch (dbErr) {
+        console.warn('Supabase persistence warning during grading:', dbErr);
+      }
+    }
+
+    return res.json({
+      success: true,
+      result,
+    });
+  } catch (err: any) {
+    console.error('Error submitting exam attempt on server:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -1049,13 +1383,31 @@ app.post('/api/exam-results/record', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Thiếu attemptId hoặc sessionId' });
     }
 
+    const nowIso = submittedAt || new Date().toISOString();
+    const numScore = Number(score) || 0;
+    const numMax = Number(maxScore) || 10;
+    const numPct = Number(percentage) || Math.round((numScore / numMax) * 100);
+
+    const memResult = {
+      id: 'res-' + attemptId,
+      attempt_id: attemptId,
+      exam_session_id: sessionId,
+      student_id: studentId || null,
+      student_name: studentName || 'Học sinh',
+      student_code: studentCode || '',
+      score: numScore,
+      max_score: numMax,
+      percentage: numPct,
+      correct_count: Number(correctCount) || 0,
+      wrong_count: Number(wrongCount) || 0,
+      unanswered_count: Number(unansweredCount) || 0,
+      submitted_at: nowIso,
+      created_at: nowIso,
+    };
+    serverExamStore.addResult(memResult as any);
+
     const admin = getSupabaseAdmin();
     if (admin) {
-      const nowIso = submittedAt || new Date().toISOString();
-      const numScore = Number(score) || 0;
-      const numMax = Number(maxScore) || 10;
-      const numPct = Number(percentage) || Math.round((numScore / numMax) * 100);
-
       // 1. Update attempt
       await admin
         .from('exam_attempts')
@@ -1097,20 +1449,11 @@ app.post('/api/exam-results/record', async (req, res) => {
 
       return res.json({
         success: true,
-        result: savedResult || {
-          id: 'res-' + attemptId,
-          attempt_id: attemptId,
-          exam_session_id: sessionId,
-          student_name: studentName,
-          student_code: studentCode,
-          score: numScore,
-          max_score: numMax,
-          percentage: numPct,
-        },
+        result: savedResult || memResult,
       });
     }
 
-    res.json({ success: true, message: 'Ghi nhận kết quả cục bộ thành công.' });
+    res.json({ success: true, result: memResult, message: 'Ghi nhận kết quả cục bộ thành công.' });
   } catch (err: any) {
     console.error('Error recording exam result on server:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -1122,20 +1465,21 @@ app.get('/api/exam-sessions/:sessionId/results', async (req, res) => {
   try {
     const sessionId = req.params.sessionId;
     const admin = getSupabaseAdmin();
+    const memResults = serverExamStore.getResultsBySession(sessionId);
 
     if (!admin) {
-      return res.json({ success: true, results: [] });
+      return res.json({ success: true, results: memResults });
     }
 
     // 1. Query exam_results
-    const { data: resultsData, error: rErr } = await admin
+    const { data: resultsData } = await admin
       .from('exam_results')
       .select('*')
       .eq('exam_session_id', sessionId)
       .order('submitted_at', { ascending: false });
 
     // 2. Query all graded or submitted attempts from exam_attempts
-    const { data: attemptsData, error: aErr } = await admin
+    const { data: attemptsData } = await admin
       .from('exam_attempts')
       .select('*')
       .eq('exam_session_id', sessionId)
@@ -1145,7 +1489,7 @@ app.get('/api/exam-sessions/:sessionId/results', async (req, res) => {
     const resultsList = resultsData ? [...resultsData] : [];
     const existingAttemptIds = new Set(resultsList.map((r: any) => r.attempt_id));
 
-    // 3. Reconcile: If any attempt in exam_attempts is missing from exam_results, backfill it!
+    // 3. Reconcile missing attempts
     const missingAttempts = (attemptsData || []).filter((att: any) => !existingAttemptIds.has(att.id));
 
     for (const att of missingAttempts) {
@@ -1194,10 +1538,20 @@ app.get('/api/exam-sessions/:sessionId/results', async (req, res) => {
       }
     }
 
-    // Sort by submitted_at descending
-    resultsList.sort((a: any, b: any) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+    // Merge with serverExamStore results so memory results are included
+    const unifiedMap = new Map<string, any>();
+    resultsList.forEach((r: any) => unifiedMap.set(r.attempt_id || r.id, r));
+    memResults.forEach((mr: any) => {
+      const key = mr.attempt_id || mr.id;
+      if (!unifiedMap.has(key)) {
+        unifiedMap.set(key, mr);
+      }
+    });
 
-    res.json({ success: true, results: resultsList, syncedCount: missingAttempts.length });
+    const finalResults = Array.from(unifiedMap.values());
+    finalResults.sort((a: any, b: any) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+
+    res.json({ success: true, results: finalResults, syncedCount: missingAttempts.length });
   } catch (err: any) {
     console.error('Error fetching session results on server:', err);
     res.status(500).json({ success: false, error: err.message });
@@ -1262,15 +1616,18 @@ app.delete('/api/exam-sessions/:sessionId/results/:resultId', async (req, res) =
   try {
     const { sessionId, resultId } = req.params;
     const attemptId = req.query.attemptId as string | undefined;
-    const admin = getSupabaseAdmin();
 
+    // 1. Delete from in-memory server store & mark eligible for retake
+    serverExamStore.deleteResult(sessionId, resultId, attemptId);
+
+    // 2. Delete from Supabase if configured
+    const admin = getSupabaseAdmin();
     if (admin) {
       if (attemptId) {
         await admin.from('attempt_answers').delete().eq('attempt_id', attemptId);
         await admin.from('exam_results').delete().eq('attempt_id', attemptId);
         await admin.from('exam_attempts').delete().eq('id', attemptId);
       }
-      // Also delete by resultId if it's a valid uuid or matches
       await admin.from('exam_results').delete().eq('id', resultId);
     }
 
@@ -1286,15 +1643,20 @@ app.post('/api/exam-sessions/:sessionId/allow-retake', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const { studentCode, attemptId } = req.body;
-    const admin = getSupabaseAdmin();
 
+    // 1. Reset in server memory store & register retake permission
+    if (studentCode) {
+      serverExamStore.allowRetake(sessionId, studentCode, attemptId);
+    }
+
+    // 2. Clear in Supabase
+    const admin = getSupabaseAdmin();
     if (admin) {
       if (attemptId) {
         await admin.from('attempt_answers').delete().eq('attempt_id', attemptId);
         await admin.from('exam_results').delete().eq('attempt_id', attemptId);
         await admin.from('exam_attempts').delete().eq('id', attemptId);
       } else if (studentCode) {
-        // Find attempts for this student in this session
         const { data: attempts } = await admin
           .from('exam_attempts')
           .select('id')
@@ -1323,22 +1685,54 @@ app.get('/api/exam-sessions/:sessionId/attempts/:attemptId/details', async (req,
     const { sessionId, attemptId } = req.params;
     const admin = getSupabaseAdmin();
 
-    if (!admin) {
-      return res.json({ success: false, message: 'Chưa cấu hình Supabase Admin' });
+    if (admin) {
+      const { data: attempt } = await admin
+        .from('exam_attempts')
+        .select('*, session:exam_sessions(title, access_code, duration_minutes, exam_id)')
+        .eq('id', attemptId)
+        .single();
+
+      const { data: answers } = await admin
+        .from('attempt_answers')
+        .select('*')
+        .eq('attempt_id', attemptId);
+
+      if (attempt) {
+        return res.json({ success: true, attempt, answers: answers || [] });
+      }
     }
 
-    const { data: attempt } = await admin
-      .from('exam_attempts')
-      .select('*, session:exam_sessions(title, access_code, duration_minutes, exam_id)')
-      .eq('id', attemptId)
-      .single();
+    // Fallback to serverExamStore
+    const memAttempt = serverExamStore.getAttempt(attemptId);
+    const memAnswersObj = serverExamStore.getAnswers(attemptId);
+    const memAnswersList = Object.entries(memAnswersObj).map(([qId, ans]: [string, any]) => ({
+      id: `ans-${attemptId}-${qId}`,
+      attempt_id: attemptId,
+      question_id: qId,
+      selected_option_id: ans.selected_option_id || null,
+      answer_text: ans.answer_text || null,
+      statement_answers: ans.statement_answers || null,
+      answered_at: new Date().toISOString(),
+    }));
 
-    const { data: answers } = await admin
-      .from('attempt_answers')
-      .select('*')
-      .eq('attempt_id', attemptId);
+    if (memAttempt) {
+      const session = serverExamStore.getSessionById(sessionId) || serverExamStore.getSessionByCode(sessionId);
+      return res.json({
+        success: true,
+        attempt: {
+          ...memAttempt,
+          session: session ? {
+            title: session.title,
+            access_code: session.access_code,
+            duration_minutes: session.duration_minutes,
+            exam_id: session.exam_id,
+          } : undefined,
+        },
+        answers: memAnswersList,
+      });
+    }
 
-    res.json({ success: true, attempt, answers: answers || [] });
+    res.json({ success: false, message: 'Không tìm thấy nhật ký làm bài này' });
   } catch (err: any) {
     console.error('Error fetching attempt details:', err);
     res.status(500).json({ success: false, error: err.message });
