@@ -236,27 +236,39 @@ export function triggerPrintPdf(htmlContent: string, title: string, options?: { 
 </html>
   `;
 
-  // Try opening in new tab/window
-  const printWindow = window.open('', '_blank', 'width=950,height=850');
-  if (printWindow && !printWindow.closed) {
-    try {
-      printWindow.document.open();
-      printWindow.document.write(fullDoc);
-      printWindow.document.close();
-      return;
-    } catch (e) {
-      console.warn('Direct print window write failed, using iframe fallback:', e);
-    }
+  // 1. Dispatch custom event to trigger In-App Print Preview Modal (Safest & 100% reliable inside iframes)
+  try {
+    const event = new CustomEvent('eduexam:open-print-preview', {
+      detail: {
+        htmlContent,
+        title,
+        isLandscape,
+        fullDoc,
+      },
+    });
+    window.dispatchEvent(event);
+    return;
+  } catch (eventErr) {
+    console.warn('Dispatch print preview event failed, using hidden iframe:', eventErr);
   }
 
-  // Fallback for iframe environments where window.open is blocked by the host
+  // 2. Fallback for environments without modal listener: Hidden printable iframe (avoids window.open white screen)
+  const existingIframe = document.getElementById('eduexam-pdf-sandbox-iframe');
+  if (existingIframe && existingIframe.parentNode) {
+    existingIframe.parentNode.removeChild(existingIframe);
+  }
+
   const iframe = document.createElement('iframe');
+  iframe.id = 'eduexam-pdf-sandbox-iframe';
   iframe.style.position = 'fixed';
   iframe.style.right = '0';
   iframe.style.bottom = '0';
-  iframe.style.width = '0';
-  iframe.style.height = '0';
+  iframe.style.width = '1px';
+  iframe.style.height = '1px';
+  iframe.style.opacity = '0.01';
+  iframe.style.pointerEvents = 'none';
   iframe.style.border = '0';
+  iframe.setAttribute('aria-hidden', 'true');
   document.body.appendChild(iframe);
 
   const doc = iframe.contentWindow?.document || iframe.contentDocument;
@@ -265,14 +277,18 @@ export function triggerPrintPdf(htmlContent: string, title: string, options?: { 
     doc.write(fullDoc);
     doc.close();
     setTimeout(() => {
-      iframe.contentWindow?.focus();
-      iframe.contentWindow?.print();
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (e) {
+        console.warn('Iframe print error:', e);
+      }
       setTimeout(() => {
         if (iframe.parentNode) {
           iframe.parentNode.removeChild(iframe);
         }
-      }, 3000);
-    }, 600);
+      }, 5000);
+    }, 800);
   }
 }
 

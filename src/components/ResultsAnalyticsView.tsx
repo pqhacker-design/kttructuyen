@@ -9,7 +9,8 @@ import {
   Calendar, 
   CheckCircle2, 
   XCircle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  RefreshCw
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -25,7 +26,7 @@ import {
 } from 'recharts';
 import { ExamSession, ExamResult, Profile } from '../types';
 import { fetchExamSessions } from '../services/sessionService';
-import { fetchResultsBySession, calculateSessionAnalytics } from '../services/resultService';
+import { fetchResultsBySession, calculateSessionAnalytics, syncSessionAttempts } from '../services/resultService';
 
 interface ResultsAnalyticsViewProps {
   currentProfile: Profile | null;
@@ -41,6 +42,8 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
   const [results, setResults] = useState<ExamResult[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
@@ -62,9 +65,14 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
   const loadSessions = async () => {
     setLoading(true);
     try {
-      const sList = await fetchExamSessions(currentProfile?.user_id);
+      let sList = await fetchExamSessions(currentProfile?.user_id);
+      if ((!sList || sList.length === 0) && currentProfile?.user_id) {
+        sList = await fetchExamSessions();
+      }
       setSessions(sList);
-      if (sList.length > 0 && !selectedSessionId) {
+      if (initialSessionId) {
+        setSelectedSessionId(initialSessionId);
+      } else if (sList.length > 0 && !selectedSessionId) {
         setSelectedSessionId(sList[0].id);
       }
     } catch (err) {
@@ -85,6 +93,27 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
       console.error('Error loading results:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSyncResults = async () => {
+    if (!selectedSessionId) return;
+    setIsSyncing(true);
+    setSyncMessage(null);
+    try {
+      const syn = await syncSessionAttempts(selectedSessionId);
+      setResults(syn.results);
+      setAnalytics(calculateSessionAnalytics(syn.results));
+      if (syn.syncedCount > 0) {
+        setSyncMessage(`Đã cập nhật ${syn.syncedCount} bài thi mới nộp vào danh sách điểm.`);
+      } else {
+        setSyncMessage(`Dữ liệu bảng điểm đã đồng bộ mới nhất (${syn.results.length} bài nộp).`);
+      }
+      setTimeout(() => setSyncMessage(null), 4000);
+    } catch (err) {
+      console.error('Error syncing:', err);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -139,7 +168,7 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center flex-wrap gap-2">
           {/* Select Session Dropdown */}
           <select
             value={selectedSessionId}
@@ -154,6 +183,16 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
           </select>
 
           <button
+            onClick={handleSyncResults}
+            disabled={isSyncing}
+            className="px-3 py-2 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white shadow-xs transition-colors flex items-center space-x-1.5"
+            title="Quét và đồng bộ tất cả bài thi vừa nộp từ học sinh vào bảng điểm"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSyncing ? 'Đang đồng bộ...' : 'Đồng bộ kết quả'}</span>
+          </button>
+
+          <button
             onClick={handleExportCSV}
             className="px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-colors flex items-center space-x-1.5"
           >
@@ -162,6 +201,13 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
           </button>
         </div>
       </div>
+
+      {syncMessage && (
+        <div className="p-3 bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-xl text-xs font-medium flex items-center space-x-2 animate-fadeIn">
+          <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />
+          <span>{syncMessage}</span>
+        </div>
+      )}
 
       {/* Analytics KPI Cards */}
       {analytics && (

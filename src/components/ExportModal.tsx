@@ -206,6 +206,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             cvData: currentCvData,
           });
         }
+
+        setTimeout(() => {
+          onClose();
+        }, 300);
       }
 
       setExportSuccess(true);

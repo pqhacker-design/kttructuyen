@@ -23,6 +23,7 @@ import { AdminUsersView } from './components/AdminUsersView';
 import { UserIsolationTestView } from './components/UserIsolationTestView';
 import { SQLSchemaView } from './components/SQLSchemaView';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { PrintPreviewModal } from './components/PrintPreviewModal';
 
 import { Profile, Exam } from './types';
 import { getCurrentProfile, onAuthStateChange, isSupabaseConfigured, signOut } from './lib/supabase';
@@ -62,6 +63,42 @@ export default function App() {
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [joinCodeInput, setJoinCodeInput] = useState('');
+
+  // Global In-App Print & PDF Preview Modal state (prevents iframe white screen)
+  const [printPreviewState, setPrintPreviewState] = useState<{
+    isOpen: boolean;
+    htmlContent: string;
+    title: string;
+    isLandscape?: boolean;
+  }>({
+    isOpen: false,
+    htmlContent: '',
+    title: '',
+    isLandscape: false,
+  });
+
+  useEffect(() => {
+    const handleOpenPrintPreview = (e: Event) => {
+      const customEvent = e as CustomEvent<{
+        htmlContent: string;
+        title: string;
+        isLandscape?: boolean;
+      }>;
+      if (customEvent.detail) {
+        setPrintPreviewState({
+          isOpen: true,
+          htmlContent: customEvent.detail.htmlContent,
+          title: customEvent.detail.title,
+          isLandscape: customEvent.detail.isLandscape ?? false,
+        });
+      }
+    };
+
+    window.addEventListener('eduexam:open-print-preview', handleOpenPrintPreview);
+    return () => {
+      window.removeEventListener('eduexam:open-print-preview', handleOpenPrintPreview);
+    };
+  }, []);
 
   // Persist active tab to prevent losing current location on browser reload or tab change
   useEffect(() => {
@@ -458,6 +495,14 @@ export default function App() {
         isOpen={isChangePasswordOpen}
         onClose={() => setIsChangePasswordOpen(false)}
         currentProfile={currentProfile}
+      />
+
+      <PrintPreviewModal
+        isOpen={printPreviewState.isOpen}
+        onClose={() => setPrintPreviewState((prev) => ({ ...prev, isOpen: false }))}
+        htmlContent={printPreviewState.htmlContent}
+        title={printPreviewState.title}
+        isLandscape={printPreviewState.isLandscape}
       />
     </div>
   );

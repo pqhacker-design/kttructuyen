@@ -59,6 +59,7 @@ export const JoinExamView: React.FC<JoinExamViewProps> = ({
   // Form submission
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [completedAttempt, setCompletedAttempt] = useState<any | null>(null);
 
   // QR display toggle
   const [showQR, setShowQR] = useState(false);
@@ -206,7 +207,13 @@ export const JoinExamView: React.FC<JoinExamViewProps> = ({
       );
 
       if (!res.success) {
-        setErrorMsg(res.message);
+        if (res.code === 'MAX_ATTEMPTS_REACHED' && res.lastAttempt) {
+          setCompletedAttempt(res.lastAttempt);
+          setErrorMsg(null);
+        } else {
+          setCompletedAttempt(null);
+          setErrorMsg(res.message);
+        }
         return;
       }
 
@@ -260,6 +267,33 @@ export const JoinExamView: React.FC<JoinExamViewProps> = ({
         {/* Scrollable Form Body */}
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0">
           <div className="p-6 space-y-4 overflow-y-auto flex-1 overscroll-contain">
+            {completedAttempt && (
+              <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-2xl space-y-2.5 shadow-2xs">
+                <div className="flex items-start space-x-2.5">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <h4 className="text-xs font-bold text-emerald-900">Bài thi đã nộp & được lưu an toàn</h4>
+                    <p className="text-xs text-emerald-700 mt-1 leading-relaxed">
+                      Học sinh <strong className="text-emerald-900">{studentName || 'Thí sinh'}</strong> (Mã: <span className="font-mono font-bold text-emerald-900">{studentCode}</span>) đã hoàn thành bài thi này. Kết quả đã được ghi nhận vào hệ thống thống kê của giáo viên.
+                    </p>
+                  </div>
+                </div>
+                {completedAttempt.score !== undefined && completedAttempt.score !== null && (
+                  <div className="mt-2 pt-2.5 border-t border-emerald-200/80 flex items-center justify-between text-xs">
+                    <span className="font-semibold text-emerald-800">Điểm số bài thi:</span>
+                    <span className="font-bold text-sm text-emerald-800 bg-white px-3 py-1 rounded-xl border border-emerald-300 shadow-2xs">
+                      {completedAttempt.score} / {completedAttempt.max_score || 10} đ ({completedAttempt.percentage}%)
+                    </span>
+                  </div>
+                )}
+                {completedAttempt.submitted_at && (
+                  <p className="text-[11px] text-emerald-600/90 text-right">
+                    Thời gian nộp: {new Date(completedAttempt.submitted_at).toLocaleString('vi-VN')}
+                  </p>
+                )}
+              </div>
+            )}
+
             {errorMsg && (
               <div className="p-3.5 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-900 flex items-start space-x-2.5 shadow-2xs">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />

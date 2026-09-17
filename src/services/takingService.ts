@@ -57,6 +57,13 @@ export interface JoinExamResponse {
     student_name: string;
     student_code: string;
   };
+  lastAttempt?: {
+    score?: number | null;
+    max_score?: number | null;
+    percentage?: number | null;
+    submitted_at?: string | null;
+    status?: string | null;
+  };
   questions?: TakingQuestionItem[];
   existingAnswers?: Record<string, { selected_option_id?: string; answer_text?: string; statement_answers?: Record<string, boolean> }>;
 }
@@ -119,6 +126,25 @@ export async function joinExamWithAccessCode(
       }
     }
 
+    // Check previous attempts in mockStore
+    const prevMockAttempts = mockStore.getAttemptsBySessionAndStudent(session.id, studentCode.trim());
+    const submittedMockCount = prevMockAttempts.filter(a => a.status === 'submitted' || a.status === 'graded').length;
+    if (submittedMockCount >= (session.max_attempts || 1)) {
+      const lastMock = prevMockAttempts.filter(a => a.status === 'submitted' || a.status === 'graded').pop();
+      return {
+        success: false,
+        code: 'MAX_ATTEMPTS_REACHED',
+        message: `Bạn đã tham gia đủ số lần cho phép (${session.max_attempts || 1} lần). Điểm số bài thi của bạn đã được ghi nhận trong bảng thống kê của giáo viên.`,
+        lastAttempt: lastMock ? {
+          score: lastMock.score,
+          max_score: lastMock.max_score,
+          percentage: lastMock.percentage,
+          submitted_at: lastMock.submitted_at,
+          status: lastMock.status,
+        } : undefined,
+      };
+    }
+
     const exam = session.exam || mockStore.getExamById(session.exam_id);
     const examQuestions = exam?.questions || [];
     let sanitizedQuestions: TakingQuestionItem[] = examQuestions.map((eq: any, idx: number) => {
@@ -161,6 +187,19 @@ export async function joinExamWithAccessCode(
     }
 
     const attemptId = `att-${cleanedCode}-${studentCode.trim()}-${Date.now()}`;
+
+    // Register attempt in mockStore so student details and status persist
+    mockStore.createAttempt({
+      id: attemptId,
+      exam_session_id: session.id,
+      attempt_number: submittedMockCount + 1,
+      started_at: new Date().toISOString(),
+      status: 'in_progress',
+      student_name: studentName.trim(),
+      student_code: studentCode.trim(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
 
     return {
       success: true,
@@ -295,7 +334,7 @@ export async function joinExamWithAccessCode(
   // 2. Check previous attempts
   const { data: prevAttempts } = await supabase
     .from('exam_attempts')
-    .select('id, status, attempt_number')
+    .select('id, status, attempt_number, score, max_score, percentage, submitted_at')
     .eq('exam_session_id', session.id)
     .ilike('student_code', studentCode.trim());
 
@@ -304,10 +343,21 @@ export async function joinExamWithAccessCode(
   ).length;
 
   if (submittedCount >= session.max_attempts) {
+    const lastSubmitted = (prevAttempts || [])
+      .filter((a) => a.status === 'submitted' || a.status === 'graded')
+      .pop();
+
     return {
       success: false,
       code: 'MAX_ATTEMPTS_REACHED',
-      message: `Bạn đã tham gia đủ số lần cho phép (${session.max_attempts} lần).`,
+      message: `Bạn đã tham gia đủ số lần cho phép (${session.max_attempts} lần). Điểm số bài thi của bạn đã được ghi nhận trong bảng thống kê của giáo viên.`,
+      lastAttempt: lastSubmitted ? {
+        score: lastSubmitted.score,
+        max_score: lastSubmitted.max_score,
+        percentage: lastSubmitted.percentage,
+        submitted_at: lastSubmitted.submitted_at,
+        status: lastSubmitted.status,
+      } : undefined,
     };
   }
 
@@ -748,12 +798,21 @@ export async function submitExamAttempt(
     const finalScore = Math.round(Math.min(totalPoints, earnedPoints) * 100) / 100;
     const percentage = Math.round((finalScore / totalPoints) * 100);
 
+    const savedAttempt = mockStore.getAttempt(attemptId);
+    if (savedAttempt) {
+      savedAttempt.status = 'graded';
+      savedAttempt.score = finalScore;
+      savedAttempt.max_score = totalPoints;
+      savedAttempt.percentage = percentage;
+      savedAttempt.submitted_at = new Date().toISOString();
+    }
+
     const result: ExamResult = {
-      id: `res-${Date.now()}`,
+      id: `res-${attemptId}`,
       attempt_id: attemptId,
       exam_session_id: session?.id || 'session-toan-10',
-      student_name: 'Học sinh',
-      student_code: 'HS-ONLINE',
+      student_name: savedAttempt?.student_name || 'Học sinh',
+      student_code: savedAttempt?.student_code || 'HS-ONLINE',
       score: finalScore,
       max_score: totalPoints,
       percentage,
@@ -766,6 +825,28 @@ export async function submitExamAttempt(
     };
 
     mockStore.addResult(result);
+
+    // Also notify server endpoint to record
+    try {
+      await fetch('/api/exam-results/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          attemptId,
+          sessionId: session?.id || 'session-toan-10',
+          studentName: result.student_name,
+          studentCode: result.student_code,
+          score: finalScore,
+          maxScore: totalPoints,
+          percentage,
+          correctCount,
+          wrongCount,
+          unansweredCount,
+          submittedAt: result.submitted_at,
+        }),
+      });
+    } catch (e) {}
+
     return {
       success: true,
       result,
@@ -1050,6 +1131,58 @@ export async function submitExamAttempt(
       created_at: new Date().toISOString(),
       review_questions: reviewQuestions,
     };
+
+    // 5. Direct Supabase upsert into exam_results
+    try {
+      await supabase
+        .from('exam_results')
+        .upsert(
+          {
+            attempt_id: attemptId,
+            student_id: attempt.student_id || null,
+            exam_session_id: session.id,
+            student_name: attempt.student_name,
+            student_code: attempt.student_code,
+            score: finalScore,
+            max_score: totalPoints,
+            percentage,
+            correct_count: correctCount,
+            wrong_count: wrongCount,
+            unanswered_count: unansweredCount,
+            submitted_at: newResult.submitted_at,
+          },
+          { onConflict: 'attempt_id' }
+        );
+    } catch (upsertErr) {
+      console.warn('Direct upsert to exam_results failed, will use server API:', upsertErr);
+    }
+
+    // 6. Server-side guaranteed upsert with service role (bypasses RLS)
+    try {
+      await fetch('/api/exam-results/record', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          attemptId,
+          sessionId: session.id,
+          studentId: attempt.student_id,
+          studentName: attempt.student_name,
+          studentCode: attempt.student_code,
+          score: finalScore,
+          maxScore: totalPoints,
+          percentage,
+          correctCount,
+          wrongCount,
+          unansweredCount,
+          submittedAt: newResult.submitted_at,
+        }),
+      });
+    } catch (serverErr) {
+      console.warn('Server recording error (non-fatal):', serverErr);
+    }
+
+    // 7. Update local mockStore as well
+    mockStore.addResult(newResult);
 
     return {
       success: true,

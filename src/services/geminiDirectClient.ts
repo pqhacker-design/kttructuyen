@@ -324,12 +324,23 @@ NHIỆM VỤ: Soạn thảo DUY NHẤT các câu hỏi cho ${partConfig.title ||
 
 THÔNG TIN:
 - Môn học: ${profile.name} (Lớp: ${params.grade}, Kì: ${params.term})
+- Thời gian làm bài toàn đề: ${params.durationMinutes || 90} phút
 - Chủ đề: ${Array.isArray(params.topics) ? params.topics.join(', ') : 'Chương trình hiện hành'}
 ${params.extractedTextbookContext ? `\n⚠️ DỮ LIỆU BÁM SÁT SGK:\n${params.extractedTextbookContext}\n` : ''}
 ${params.customPromptRequirements ? `\n- Yêu cầu bổ sung của giáo viên: ${params.customPromptRequirements}\n` : ''}
 ${matrixSnippet}
 
 ${partSpecificRules}
+
+RÀNG BUỘC SƯ PHẠM DỰA VÀO THỜI GIAN LÀM BÀI (${params.durationMinutes || 90} PHÚT):
+- Cân chỉnh độ dài ngữ liệu câu dẫn, số bước tính toán và độ phức tạp bài toán sao cho học sinh hoàn thành bài thi trọn vẹn trong đúng ${params.durationMinutes || 90} phút.
+- Phân bổ thời gian ước tính:
+  + Câu trắc nghiệm Phần I (nhiều lựa chọn): ~1.0 - 1.5 phút/câu.
+  + Câu trắc nghiệm Phần II (Đúng - Sai): ~3.0 - 4.0 phút/câu (khoảng 45 - 60 giây cho mỗi ý a, b, c, d).
+  + Câu trắc nghiệm Phần III (Trả lời ngắn): ~2.0 - 3.0 phút/câu.
+  + Câu tự luận Phần IV: ~${Math.max(5, Math.round(((params.durationMinutes || 90) * 0.35) / Math.max(1, targetCount)))} phút/câu.
+- Với bài kiểm tra ngắn (15 - 45 phút): Câu hỏi phải cô đọng, súc tích, tránh các phép tính quá nhiều tầng cồng kềnh hay ngữ liệu đọc quá dài làm học sinh không kịp làm bài.
+- Với bài kiểm tra chuẩn (60 - 90 - 120 phút): Phân bổ các mức độ tư duy cân đối từ Nhận biết, Thông hiểu đến Vận dụng, Vận dụng cao chuẩn GDPT 2018 mà không làm đề thi quá tải.
 
 RÀNG BUỘC CỰC KỲ QUAN TRỌNG:
 1. ĐÚNG VÀ ĐỦ SỐ LƯỢNG: Mảng "questions" BẮT BUỘC PHẢI CÓ ĐỦ CHÍNH XÁC ${targetCount} CÂU HỎI. Không được thiếu dù chỉ 1 câu!

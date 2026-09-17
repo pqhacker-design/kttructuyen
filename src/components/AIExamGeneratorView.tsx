@@ -36,7 +36,8 @@ import {
   Image as ImageIcon,
   Eye,
   Table,
-  RotateCcw
+  RotateCcw,
+  Clock
 } from 'lucide-react';
 import { 
   SubjectCode, 
@@ -191,6 +192,156 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
     }));
     setExamFormat(preset.format);
     if (preset.ratio) setHybridRatio(preset.ratio);
+  };
+
+  // Real-time calculation of estimated completion time based on question counts & types
+  const estimatedExamMinutes = React.useMemo(() => {
+    let mins = 0;
+    for (const p of structure.parts) {
+      if (!p.enabled || p.questionCount <= 0) continue;
+      if (p.part === 1) mins += p.questionCount * 1.5; // ~1.5 mins per Multiple Choice
+      else if (p.part === 2) mins += p.questionCount * 3.5; // ~3.5 mins per True/False (4 statements)
+      else if (p.part === 3) mins += p.questionCount * 2.5; // ~2.5 mins per Short Answer
+      else if (p.part === 4) mins += (p.questionCount || 1) * 8.0; // ~8 mins per Essay item
+    }
+    return Math.round(mins);
+  }, [structure.parts]);
+
+  // Total questions count
+  const totalQuestionsCount = React.useMemo(() => {
+    return structure.parts
+      .filter((p) => p.enabled)
+      .reduce((sum, p) => sum + (p.questionCount || 0), 0);
+  }, [structure.parts]);
+
+  // Automatically adapt question structure according to selected exam duration
+  const handleApplyDurationOptimized = (targetMins: number) => {
+    setDurationMinutes(targetMins);
+    if (targetMins <= 20) {
+      // 15-minute exam: 10 multiple choice questions (1.0 pt each)
+      setStructure((prev) => ({
+        ...prev,
+        totalScore: 10.0,
+        examFormat: 'multiple_choice_only',
+        parts: [
+          {
+            part: 1,
+            type: 'multiple_choice',
+            title: 'Phần I: Câu hỏi trắc nghiệm nhiều lựa chọn (10 câu)',
+            description: '10 câu trắc nghiệm nhanh gọn, vừa vặn kiểm tra 15 phút (1.0đ/câu).',
+            enabled: true,
+            questionCount: 10,
+            pointsPerQuestion: 1.0,
+            totalPoints: 10.0,
+          },
+          {
+            part: 2,
+            type: 'true_false',
+            title: 'Phần II: Câu hỏi trắc nghiệm Đúng - Sai',
+            description: 'Đã tắt cho bài kiểm tra 15 phút.',
+            enabled: false,
+            questionCount: 0,
+            pointsPerQuestion: 1.0,
+            statementsPerQuestion: 4,
+            pointsPerStatement: 0.25,
+            totalPoints: 0.0,
+          },
+          {
+            part: 3,
+            type: 'short_answer',
+            title: 'Phần III: Câu hỏi trả lời ngắn',
+            description: 'Đã tắt cho bài kiểm tra 15 phút.',
+            enabled: false,
+            questionCount: 0,
+            pointsPerQuestion: 0.5,
+            totalPoints: 0.0,
+          },
+          {
+            part: 4,
+            type: 'essay',
+            title: 'Phần IV: Tự luận',
+            description: 'Đã tắt cho bài kiểm tra 15 phút.',
+            enabled: false,
+            questionCount: 0,
+            totalPoints: 0.0,
+          },
+        ],
+        cognitiveDistribution: {
+          recognition: 5.0,
+          comprehension: 4.0,
+          application: 1.0,
+          advanced_application: 0.0,
+        },
+      }));
+      setExamFormat('multiple_choice_only');
+    } else if (targetMins <= 50) {
+      // 45-minute exam: 20 multiple choice questions (0.5 pt each)
+      setStructure((prev) => ({
+        ...prev,
+        totalScore: 10.0,
+        examFormat: 'multiple_choice_only',
+        parts: [
+          {
+            part: 1,
+            type: 'multiple_choice',
+            title: 'Phần I: Câu hỏi trắc nghiệm nhiều lựa chọn (20 câu)',
+            description: '20 câu hỏi trắc nghiệm 4 lựa chọn (0.50đ / câu = 10,0 điểm)',
+            enabled: true,
+            questionCount: 20,
+            pointsPerQuestion: 0.5,
+            totalPoints: 10.0,
+          },
+          {
+            part: 2,
+            type: 'true_false',
+            title: 'Phần II: Câu hỏi trắc nghiệm Đúng - Sai',
+            description: 'Đã tắt.',
+            enabled: false,
+            questionCount: 0,
+            pointsPerQuestion: 1.0,
+            statementsPerQuestion: 4,
+            pointsPerStatement: 0.25,
+            totalPoints: 0.0,
+          },
+          {
+            part: 3,
+            type: 'short_answer',
+            title: 'Phần III: Câu hỏi trả lời ngắn',
+            description: 'Đã tắt.',
+            enabled: false,
+            questionCount: 0,
+            pointsPerQuestion: 0.5,
+            totalPoints: 0.0,
+          },
+          {
+            part: 4,
+            type: 'essay',
+            title: 'Phần IV: Tự luận',
+            description: 'Đã tắt.',
+            enabled: false,
+            questionCount: 0,
+            totalPoints: 0.0,
+          },
+        ],
+        cognitiveDistribution: {
+          recognition: 4.0,
+          comprehension: 4.0,
+          application: 2.0,
+          advanced_application: 0.0,
+        },
+      }));
+      setExamFormat('multiple_choice_only');
+    } else if (targetMins <= 75) {
+      // 60-minute exam: THCS standard
+      const p = SubjectRuleEngine.getProfile(selectedSubject);
+      setStructure(JSON.parse(JSON.stringify(p.default_structure)));
+      setExamFormat(detectExamFormat(p.default_structure));
+    } else {
+      // 90 or 120-minute exam: standard CV 7991
+      const p = SubjectRuleEngine.getProfile(selectedSubject);
+      setStructure(JSON.parse(JSON.stringify(p.default_structure)));
+      setExamFormat(detectExamFormat(p.default_structure));
+    }
   };
 
   // Step 3: Matrix
@@ -1040,7 +1191,7 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
             </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
             {/* Subject Selector */}
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
@@ -1076,7 +1227,13 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
               <select
                 id="select-grade"
                 value={grade}
-                onChange={(e) => setGrade(Number(e.target.value))}
+                onChange={(e) => {
+                  const newGrade = Number(e.target.value);
+                  setGrade(newGrade);
+                  if (term.includes('Giữa kì') || term.includes('Cuối kì')) {
+                    setDurationMinutes(newGrade <= 9 ? 60 : 90);
+                  }
+                }}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:bg-white"
               >
                 <option value={6}>Lớp 6 (THCS)</option>
@@ -1097,7 +1254,19 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
               <select
                 id="select-term"
                 value={term}
-                onChange={(e) => setTerm(e.target.value)}
+                onChange={(e) => {
+                  const newTerm = e.target.value;
+                  setTerm(newTerm);
+                  if (newTerm === '15 phút') {
+                    setDurationMinutes(15);
+                  } else if (newTerm === '1 tiết') {
+                    setDurationMinutes(45);
+                  } else if (newTerm.includes('Giữa kì')) {
+                    setDurationMinutes(grade <= 9 ? 60 : 90);
+                  } else if (newTerm.includes('Cuối kì')) {
+                    setDurationMinutes(90);
+                  }
+                }}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:bg-white"
               >
                 <option value="Giữa kì I">Kiểm tra Giữa kì I</option>
@@ -1107,6 +1276,110 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
                 <option value="1 tiết">Kiểm tra định kỳ 1 tiết (45 phút)</option>
                 <option value="15 phút">Kiểm tra thường xuyên (15 phút)</option>
               </select>
+            </div>
+
+            {/* Duration Selector */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Thời gian làm bài *
+                </label>
+                <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                  {durationMinutes} phút
+                </span>
+              </div>
+              <div className="relative">
+                <input
+                  type="number"
+                  min={10}
+                  max={240}
+                  step={5}
+                  value={durationMinutes}
+                  onChange={(e) => setDurationMinutes(Math.max(5, Math.min(240, Number(e.target.value) || 45)))}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 focus:bg-white pr-14"
+                  placeholder="Số phút"
+                />
+                <span className="absolute right-3.5 top-2.5 text-xs font-bold text-slate-400 pointer-events-none">
+                  phút
+                </span>
+              </div>
+              {/* Quick duration presets */}
+              <div className="flex items-center gap-1.5 mt-2">
+                {[15, 45, 60, 90, 120].map((mins) => (
+                  <button
+                    key={mins}
+                    type="button"
+                    onClick={() => handleApplyDurationOptimized(mins)}
+                    title={`Chọn ${mins} phút và gợi ý cấu trúc đề tương ứng`}
+                    className={`flex-1 py-1 text-[11px] font-bold rounded-lg border transition-all ${
+                      durationMinutes === mins
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    {mins}p
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Real-time pedagogical duration analysis */}
+          <div className={`border rounded-2xl p-4 transition-all ${
+            estimatedExamMinutes > durationMinutes + 10
+              ? 'bg-amber-50/70 border-amber-200 text-amber-900'
+              : estimatedExamMinutes < durationMinutes - 15 && totalQuestionsCount > 0
+              ? 'bg-sky-50/70 border-sky-200 text-sky-900'
+              : 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+          }`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start space-x-2.5">
+                <Clock className={`w-5 h-5 shrink-0 mt-0.5 ${
+                  estimatedExamMinutes > durationMinutes + 10
+                    ? 'text-amber-600'
+                    : estimatedExamMinutes < durationMinutes - 15 && totalQuestionsCount > 0
+                    ? 'text-sky-600'
+                    : 'text-emerald-600'
+                }`} />
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold uppercase tracking-wider">
+                      Cân chỉnh thời gian làm bài & số lượng câu hỏi
+                    </span>
+                    <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/80 border border-current shadow-2xs">
+                      Thời lượng: {durationMinutes} phút
+                    </span>
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-white/80 border border-current shadow-2xs">
+                      Ước tính cần: ~{estimatedExamMinutes} phút ({totalQuestionsCount} câu)
+                    </span>
+                  </div>
+                  <p className="text-xs mt-1.5 leading-relaxed opacity-90">
+                    {estimatedExamMinutes > durationMinutes + 10 ? (
+                      <span>
+                        ⚠️ Cấu hình hiện tại gồm <strong>{totalQuestionsCount} câu</strong> (ước tính cần ~{estimatedExamMinutes} phút), có thể quá dài so với thời gian làm bài <strong>{durationMinutes} phút</strong> của học sinh.
+                      </span>
+                    ) : estimatedExamMinutes < durationMinutes - 15 && totalQuestionsCount > 0 ? (
+                      <span>
+                        💡 Thời gian làm bài <strong>{durationMinutes} phút</strong> tương đối rộng cho {totalQuestionsCount} câu (~{estimatedExamMinutes} phút). AI sẽ nâng độ sâu các câu hỏi vận dụng hoặc bạn có thể bổ sung thêm câu hỏi.
+                      </span>
+                    ) : (
+                      <span>
+                        Cấu trúc phân bổ lý tưởng: <strong>{totalQuestionsCount} câu</strong> (~{estimatedExamMinutes} phút) hoàn toàn tương thích với thời lượng làm bài <strong>{durationMinutes} phút</strong> theo chuẩn GDPT 2018.
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {estimatedExamMinutes > durationMinutes + 10 && (
+                <button
+                  type="button"
+                  onClick={() => handleApplyDurationOptimized(durationMinutes)}
+                  className="shrink-0 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-2xs transition-colors"
+                >
+                  Tự động cân chỉnh ({durationMinutes}p)
+                </button>
+              )}
             </div>
           </div>
 
@@ -2788,33 +3061,42 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
 
               <div className="flex items-center space-x-2">
                 <button
-                  onClick={() => {
-                    if (previewTab === 'exam') {
-                      exportExamToWord({
-                        title: generatedExamData.exam.title,
-                        subject: selectedSubject,
-                        grade,
-                        durationMinutes: generatedExamData.exam.duration_minutes,
-                        questions: generatedExamData.questions,
-                        structure: generatedExamData.structure,
-                      });
-                    } else if (previewTab === 'answers') {
-                      exportAnswersToWord({
-                        title: generatedExamData.exam.title,
-                        subject: selectedSubject,
-                        grade,
-                        questions: generatedExamData.questions,
-                      });
-                    } else {
-                      exportMatrixToWord({
-                        title: generatedExamData.exam.title,
-                        subject: selectedSubject,
-                        grade,
-                        matrixCells,
-                      });
+                  onClick={async () => {
+                    try {
+                      if (previewTab === 'exam') {
+                        await exportExamToWord({
+                          title: generatedExamData.exam.title,
+                          subject: selectedSubject,
+                          grade,
+                          durationMinutes: generatedExamData.exam.duration_minutes || durationMinutes,
+                          questions: generatedExamData.questions,
+                          structure: generatedExamData.structure,
+                        });
+                      } else if (previewTab === 'answers') {
+                        await exportAnswersToWord({
+                          title: generatedExamData.exam.title,
+                          subject: selectedSubject,
+                          grade,
+                          questions: generatedExamData.questions,
+                        });
+                      } else {
+                        await exportMatrixToWord({
+                          title: generatedExamData.exam.title,
+                          subject: SubjectRuleEngine.getProfile(selectedSubject).name,
+                          grade,
+                          durationMinutes: generatedExamData.exam.duration_minutes || durationMinutes,
+                          questions: generatedExamData.questions,
+                          structure: generatedExamData.structure,
+                          matrixCells,
+                          cvData: cv7991Data,
+                        });
+                      }
+                    } catch (exportErr) {
+                      console.error('Lỗi khi xuất Word:', exportErr);
+                      alert('Có lỗi xảy ra khi tạo file Word. Vui lòng thử lại!');
                     }
                   }}
-                  className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-300 hover:border-blue-500 hover:text-blue-700 text-slate-700 rounded-lg shadow-2xs flex items-center space-x-1 transition-all"
+                  className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-300 hover:border-blue-500 hover:text-blue-700 text-slate-700 rounded-lg shadow-2xs flex items-center space-x-1 transition-all active:scale-95"
                   title="Xuất tab hiện tại ra file Word (.docx) tương thích 100% Word Equation"
                 >
                   <span className="w-4 h-4 rounded bg-blue-600 text-white font-bold text-[9px] flex items-center justify-center">W</span>
@@ -2823,32 +3105,41 @@ export const AIExamGeneratorView: React.FC<AIExamGeneratorViewProps> = ({
 
                 <button
                   onClick={() => {
-                    if (previewTab === 'exam') {
-                      exportExamToPdf({
-                        title: generatedExamData.exam.title,
-                        subject: selectedSubject,
-                        grade,
-                        durationMinutes: generatedExamData.exam.duration_minutes,
-                        questions: generatedExamData.questions,
-                        structure: generatedExamData.structure,
-                      });
-                    } else if (previewTab === 'answers') {
-                      exportAnswersToPdf({
-                        title: generatedExamData.exam.title,
-                        subject: selectedSubject,
-                        grade,
-                        questions: generatedExamData.questions,
-                      });
-                    } else {
-                      exportMatrixToPdf({
-                        title: generatedExamData.exam.title,
-                        subject: selectedSubject,
-                        grade,
-                        matrixCells,
-                      });
+                    try {
+                      if (previewTab === 'exam') {
+                        exportExamToPdf({
+                          title: generatedExamData.exam.title,
+                          subject: selectedSubject,
+                          grade,
+                          durationMinutes: generatedExamData.exam.duration_minutes || durationMinutes,
+                          questions: generatedExamData.questions,
+                          structure: generatedExamData.structure,
+                        });
+                      } else if (previewTab === 'answers') {
+                        exportAnswersToPdf({
+                          title: generatedExamData.exam.title,
+                          subject: selectedSubject,
+                          grade,
+                          questions: generatedExamData.questions,
+                        });
+                      } else {
+                        exportMatrixToPdf({
+                          title: generatedExamData.exam.title,
+                          subject: SubjectRuleEngine.getProfile(selectedSubject).name,
+                          grade,
+                          durationMinutes: generatedExamData.exam.duration_minutes || durationMinutes,
+                          questions: generatedExamData.questions,
+                          structure: generatedExamData.structure,
+                          matrixCells,
+                          cvData: cv7991Data,
+                        });
+                      }
+                    } catch (exportErr) {
+                      console.error('Lỗi khi xuất PDF:', exportErr);
+                      alert('Có lỗi xảy ra khi chuẩn bị bản in PDF. Vui lòng thử lại!');
                     }
                   }}
-                  className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-300 hover:border-rose-500 hover:text-rose-700 text-slate-700 rounded-lg shadow-2xs flex items-center space-x-1 transition-all"
+                  className="px-2.5 py-1 text-xs font-semibold bg-white border border-slate-300 hover:border-rose-500 hover:text-rose-700 text-slate-700 rounded-lg shadow-2xs flex items-center space-x-1 transition-all active:scale-95"
                   title="Xuất tab hiện tại ra file PDF in ấn chuẩn A4"
                 >
                   <span className="w-4 h-4 rounded bg-rose-600 text-white font-bold text-[9px] flex items-center justify-center">P</span>

@@ -532,6 +532,19 @@ export const mockStore = {
   },
 
   // Attempts & Results
+  createAttempt: (attempt: ExamAttempt) => {
+    if (!storeState.attempts) storeState.attempts = {};
+    storeState.attempts[attempt.id] = attempt;
+    persistStore();
+  },
+  getAttempt: (id: string): ExamAttempt | undefined => {
+    return (storeState.attempts || {})[id];
+  },
+  getAttemptsBySessionAndStudent: (sessionId: string, studentCode: string): ExamAttempt[] => {
+    return Object.values(storeState.attempts || {}).filter(
+      (a) => a.exam_session_id === sessionId && (a.student_code || '').toLowerCase() === studentCode.toLowerCase()
+    );
+  },
   saveAttemptAnswer: (attemptId: string, questionId: string, answer: { selected_option_id?: string; answer_text?: string; statement_answers?: Record<string, boolean> }) => {
     if (!storeState.answers[attemptId]) {
       storeState.answers[attemptId] = {};
@@ -543,10 +556,16 @@ export const mockStore = {
     return storeState.answers[attemptId] || {};
   },
   addResult: (res: ExamResult) => {
-    storeState.results.unshift(res);
-    const session = storeState.sessions.find(s => s.id === res.exam_session_id);
-    if (session) {
-      session.attempts_count = (session.attempts_count || 0) + 1;
+    // Avoid duplicate results for the same attempt
+    const existingIdx = storeState.results.findIndex(r => r.attempt_id === res.attempt_id || r.id === res.id);
+    if (existingIdx >= 0) {
+      storeState.results[existingIdx] = res;
+    } else {
+      storeState.results.unshift(res);
+      const session = storeState.sessions.find(s => s.id === res.exam_session_id);
+      if (session) {
+        session.attempts_count = (session.attempts_count || 0) + 1;
+      }
     }
     persistStore();
   },

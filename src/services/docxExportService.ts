@@ -541,17 +541,56 @@ export async function buildDocxZip(
 }
 
 /**
- * Triggers client-side download of a Blob file
+ * Triggers client-side download of a Blob file with iframe safety and fallback
  */
 export function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+
+    // Use mouse event dispatch for cross-browser safety in iframe environments
+    try {
+      const clickEvt = new MouseEvent('click', {
+        view: window,
+        bubbles: true,
+        cancelable: true,
+      });
+      a.dispatchEvent(clickEvt);
+    } catch {
+      a.click();
+    }
+
+    setTimeout(() => {
+      if (a.parentNode) {
+        document.body.removeChild(a);
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }, 1500);
+  } catch (err) {
+    console.error('Lỗi khi tải file blob:', err);
+    try {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result as string;
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = dataUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          if (a.parentNode) document.body.removeChild(a);
+        }, 1500);
+      };
+      reader.readAsDataURL(blob);
+    } catch (fallbackErr) {
+      console.error('Fallback FileReader failed:', fallbackErr);
+    }
+  }
 }
 
 // ----------------------------------------------------------------------------

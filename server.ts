@@ -357,12 +357,23 @@ NHIỆM VỤ: Soạn thảo DUY NHẤT các câu hỏi cho ${partConfig.title ||
 
 THÔNG TIN:
 - Môn học: ${subject} (Lớp: ${grade}, Kì: ${term})
+- Thời gian làm bài toàn đề: ${duration || 90} phút
 - Chủ đề: ${Array.isArray(topics) ? topics.join(', ') : 'Chương trình hiện hành'}
 ${extractedTextbookContext ? `\n⚠️ DỮ LIỆU BÁM SÁT SGK:\n${extractedTextbookContext}\n` : ''}
 ${customPrompt ? `\n- Yêu cầu của giáo viên: ${customPrompt}\n` : ''}
 ${relevantCells.length > 0 ? `\nMA TRẬN CHO PHẦN NÀY:\n${JSON.stringify(relevantCells, null, 2)}\n` : ''}
 
 ${partRules}
+
+RÀNG BUỘC SƯ PHẠM DỰA VÀO THỜI GIAN LÀM BÀI (${duration || 90} PHÚT):
+- Cân chỉnh độ dài ngữ liệu câu dẫn, số bước tính toán và độ phức tạp bài toán sao cho học sinh hoàn thành bài thi trọn vẹn trong đúng ${duration || 90} phút.
+- Phân bổ thời gian ước tính:
+  + Câu trắc nghiệm Phần I (nhiều lựa chọn): ~1.0 - 1.5 phút/câu.
+  + Câu trắc nghiệm Phần II (Đúng - Sai): ~3.0 - 4.0 phút/câu (khoảng 45 - 60 giây cho mỗi ý a, b, c, d).
+  + Câu trắc nghiệm Phần III (Trả lời ngắn): ~2.0 - 3.0 phút/câu.
+  + Câu tự luận Phần IV: ~${Math.max(5, Math.round(((duration || 90) * 0.35) / Math.max(1, targetCount)))} phút/câu.
+- Với bài kiểm tra ngắn (15 - 45 phút): Câu hỏi phải cô đọng, súc tích, tránh các phép tính quá nhiều tầng cồng kềnh hay ngữ liệu đọc quá dài làm học sinh không kịp làm bài.
+- Với bài kiểm tra chuẩn (60 - 90 - 120 phút): Phân bổ các mức độ tư duy cân đối từ Nhận biết, Thông hiểu đến Vận dụng, Vận dụng cao chuẩn GDPT 2018 mà không làm đề thi quá tải.
 
 RÀNG BUỘC CỰC KỲ QUAN TRỌNG:
 1. ĐÚNG VÀ ĐỦ SỐ LƯỢNG: Mảng "questions" BẮT BUỘC PHẢI CÓ ĐỦ CHÍNH XÁC ${targetCount} CÂU HỎI.
@@ -1011,6 +1022,236 @@ app.get('/api/exam-access/:code', async (req, res) => {
       code,
       message: 'Mã phòng thi hợp lệ trong chuẩn cấu hình hệ thống. Hệ thống phòng thi sẵn sàng.',
     });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/exam-results/record - Server-side guaranteed persistence for exam results
+app.post('/api/exam-results/record', async (req, res) => {
+  try {
+    const {
+      attemptId,
+      sessionId,
+      studentId,
+      studentName,
+      studentCode,
+      score,
+      maxScore,
+      percentage,
+      correctCount,
+      wrongCount,
+      unansweredCount,
+      submittedAt,
+    } = req.body;
+
+    if (!attemptId || !sessionId) {
+      return res.status(400).json({ success: false, error: 'Thiếu attemptId hoặc sessionId' });
+    }
+
+    const admin = getSupabaseAdmin();
+    if (admin) {
+      const nowIso = submittedAt || new Date().toISOString();
+      const numScore = Number(score) || 0;
+      const numMax = Number(maxScore) || 10;
+      const numPct = Number(percentage) || Math.round((numScore / numMax) * 100);
+
+      // 1. Update attempt
+      await admin
+        .from('exam_attempts')
+        .update({
+          status: 'graded',
+          submitted_at: nowIso,
+          score: numScore,
+          max_score: numMax,
+          percentage: numPct,
+        })
+        .eq('id', attemptId);
+
+      // 2. Upsert into exam_results (bypasses RLS)
+      const { data: savedResult, error: saveErr } = await admin
+        .from('exam_results')
+        .upsert(
+          {
+            attempt_id: attemptId,
+            student_id: studentId || null,
+            exam_session_id: sessionId,
+            student_name: studentName || 'Học sinh',
+            student_code: studentCode || '',
+            score: numScore,
+            max_score: numMax,
+            percentage: numPct,
+            correct_count: Number(correctCount) || 0,
+            wrong_count: Number(wrongCount) || 0,
+            unanswered_count: Number(unansweredCount) || 0,
+            submitted_at: nowIso,
+          },
+          { onConflict: 'attempt_id' }
+        )
+        .select()
+        .single();
+
+      if (saveErr) {
+        console.warn('Admin upsert exam_results warning:', saveErr.message);
+      }
+
+      return res.json({
+        success: true,
+        result: savedResult || {
+          id: 'res-' + attemptId,
+          attempt_id: attemptId,
+          exam_session_id: sessionId,
+          student_name: studentName,
+          student_code: studentCode,
+          score: numScore,
+          max_score: numMax,
+          percentage: numPct,
+        },
+      });
+    }
+
+    res.json({ success: true, message: 'Ghi nhận kết quả cục bộ thành công.' });
+  } catch (err: any) {
+    console.error('Error recording exam result on server:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/exam-sessions/:sessionId/results - Fetch & auto-reconcile results from attempts
+app.get('/api/exam-sessions/:sessionId/results', async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const admin = getSupabaseAdmin();
+
+    if (!admin) {
+      return res.json({ success: true, results: [] });
+    }
+
+    // 1. Query exam_results
+    const { data: resultsData, error: rErr } = await admin
+      .from('exam_results')
+      .select('*')
+      .eq('exam_session_id', sessionId)
+      .order('submitted_at', { ascending: false });
+
+    // 2. Query all graded or submitted attempts from exam_attempts
+    const { data: attemptsData, error: aErr } = await admin
+      .from('exam_attempts')
+      .select('*')
+      .eq('exam_session_id', sessionId)
+      .in('status', ['graded', 'submitted'])
+      .order('submitted_at', { ascending: false });
+
+    const resultsList = resultsData ? [...resultsData] : [];
+    const existingAttemptIds = new Set(resultsList.map((r: any) => r.attempt_id));
+
+    // 3. Reconcile: If any attempt in exam_attempts is missing from exam_results, backfill it!
+    const missingAttempts = (attemptsData || []).filter((att: any) => !existingAttemptIds.has(att.id));
+
+    for (const att of missingAttempts) {
+      const numScore = Number(att.score ?? 0);
+      const numMax = Number(att.max_score ?? 10);
+      const numPct = Number(att.percentage ?? Math.round((numScore / numMax) * 100));
+      const subTime = att.submitted_at || att.created_at || new Date().toISOString();
+
+      const newRecord = {
+        attempt_id: att.id,
+        student_id: att.student_id || null,
+        exam_session_id: sessionId,
+        student_name: att.student_name || 'Học sinh',
+        student_code: att.student_code || '',
+        score: numScore,
+        max_score: numMax,
+        percentage: numPct,
+        correct_count: 0,
+        wrong_count: 0,
+        unanswered_count: 0,
+        submitted_at: subTime,
+      };
+
+      try {
+        const { data: inserted, error: insErr } = await admin
+          .from('exam_results')
+          .upsert(newRecord, { onConflict: 'attempt_id' })
+          .select()
+          .single();
+
+        if (inserted && !insErr) {
+          resultsList.push(inserted);
+        } else {
+          resultsList.push({
+            id: 'res-' + att.id,
+            ...newRecord,
+            created_at: subTime,
+          });
+        }
+      } catch (backfillErr) {
+        resultsList.push({
+          id: 'res-' + att.id,
+          ...newRecord,
+          created_at: subTime,
+        });
+      }
+    }
+
+    // Sort by submitted_at descending
+    resultsList.sort((a: any, b: any) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+
+    res.json({ success: true, results: resultsList, syncedCount: missingAttempts.length });
+  } catch (err: any) {
+    console.error('Error fetching session results on server:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/exam-sessions/:sessionId/sync-attempts - Trigger sync from exam_attempts to exam_results
+app.post('/api/exam-sessions/:sessionId/sync-attempts', async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const admin = getSupabaseAdmin();
+    if (!admin) {
+      return res.json({ success: true, syncedCount: 0, message: 'Chưa cấu hình Supabase Admin' });
+    }
+
+    const { data: attempts } = await admin
+      .from('exam_attempts')
+      .select('*')
+      .eq('exam_session_id', sessionId)
+      .in('status', ['graded', 'submitted']);
+
+    const { data: existingResults } = await admin
+      .from('exam_results')
+      .select('attempt_id')
+      .eq('exam_session_id', sessionId);
+
+    const existingIds = new Set((existingResults || []).map((r: any) => r.attempt_id));
+    const toInsert = (attempts || []).filter((a: any) => !existingIds.has(a.id));
+
+    let insertedCount = 0;
+    for (const att of toInsert) {
+      const numScore = Number(att.score ?? 0);
+      const numMax = Number(att.max_score ?? 10);
+      const numPct = Number(att.percentage ?? Math.round((numScore / numMax) * 100));
+
+      const { error } = await admin.from('exam_results').upsert({
+        attempt_id: att.id,
+        student_id: att.student_id || null,
+        exam_session_id: sessionId,
+        student_name: att.student_name || 'Học sinh',
+        student_code: att.student_code || '',
+        score: numScore,
+        max_score: numMax,
+        percentage: numPct,
+        correct_count: 0,
+        wrong_count: 0,
+        unanswered_count: 0,
+        submitted_at: att.submitted_at || att.created_at || new Date().toISOString(),
+      }, { onConflict: 'attempt_id' });
+
+      if (!error) insertedCount++;
+    }
+
+    res.json({ success: true, syncedCount: insertedCount });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
