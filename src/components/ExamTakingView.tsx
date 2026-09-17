@@ -323,7 +323,15 @@ export const ExamTakingView: React.FC<ExamTakingViewProps> = ({
     if (!attempt?.id) return;
     setSubmitting(true);
     try {
-      const res = await submitExamAttempt(attempt.id, answers);
+      const res = await submitExamAttempt(
+        attempt.id,
+        answers,
+        session?.id,
+        attempt.student_name,
+        attempt.student_code,
+        (session as any)?.exam_id,
+        questions
+      );
       if (res.success && res.result) {
         setExamResult(res.result);
         setIsSubmitModalOpen(false);

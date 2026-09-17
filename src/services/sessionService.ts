@@ -49,6 +49,39 @@ export async function fetchExamSessions(ownerId?: string): Promise<ExamSession[]
   }
 }
 
+// Helper to sync session to backend so cross-browser joins and grading work instantly
+export async function syncSessionToBackend(session: any, exam?: any, questions?: any[]) {
+  try {
+    const finalExam = exam || (session.exam_id ? mockStore.getExamById(session.exam_id) : undefined);
+    const finalQuestions = questions || finalExam?.questions || [];
+    await fetch('/api/exam-sessions/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session,
+        exam: finalExam,
+        questions: finalQuestions,
+      }),
+    });
+  } catch (err) {
+    // Non-blocking background sync
+  }
+}
+
+export async function syncAllSessionsAndExamsToBackend() {
+  try {
+    const sessions = mockStore.getSessions();
+    const exams = mockStore.getExams();
+    await fetch('/api/exam-sessions/sync-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessions, exams }),
+    });
+  } catch (err) {
+    // Non-blocking
+  }
+}
+
 export async function createExamSession(session: {
   exam_id: string;
   owner_id: string;
@@ -71,7 +104,9 @@ export async function createExamSession(session: {
     if (existing) {
       throw new Error(`Mã tham gia "${cleanedCode}" đã tồn tại. Vui lòng chọn mã khác.`);
     }
-    return mockStore.addSession({ ...session, access_code: cleanedCode });
+    const created = mockStore.addSession({ ...session, access_code: cleanedCode });
+    syncSessionToBackend(created);
+    return created;
   }
 
   try {
@@ -98,11 +133,14 @@ export async function createExamSession(session: {
       throw new Error(error.message);
     }
 
+    syncSessionToBackend(data);
     return data;
   } catch (err: any) {
     if (err.message.includes('đã tồn tại')) throw err;
     // Fallback to local store
-    return mockStore.addSession({ ...session, access_code: cleanedCode });
+    const fallback = mockStore.addSession({ ...session, access_code: cleanedCode });
+    syncSessionToBackend(fallback);
+    return fallback;
   }
 }
 

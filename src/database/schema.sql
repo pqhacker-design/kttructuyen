@@ -929,6 +929,75 @@ begin
 end;
 $$;
 
+-- 4. ALLOW STUDENT RETAKE RPC
+create or replace function public.allow_student_retake(
+  p_session_id text,
+  p_student_code text,
+  p_attempt_id text default null
+)
+returns jsonb
+language plpgsql
+security definer
+as $$
+declare
+  v_att_ids uuid[];
+begin
+  if p_attempt_id is not null then
+    -- Mark attempt as cancelled first so it never blocks count checks
+    update public.exam_attempts
+    set status = 'cancelled', score = 0, percentage = 0
+    where id = p_attempt_id::uuid;
+
+    delete from public.attempt_answers where attempt_id = p_attempt_id::uuid;
+    delete from public.exam_results where attempt_id = p_attempt_id::uuid;
+    delete from public.exam_attempts where id = p_attempt_id::uuid;
+  elsif p_student_code is not null then
+    select array_agg(id) into v_att_ids
+    from public.exam_attempts
+    where exam_session_id = p_session_id::uuid
+      and lower(trim(student_code)) = lower(trim(p_student_code));
+
+    if v_att_ids is not null and array_length(v_att_ids, 1) > 0 then
+      update public.exam_attempts
+      set status = 'cancelled', score = 0, percentage = 0
+      where id = any(v_att_ids);
+
+      delete from public.attempt_answers where attempt_id = any(v_att_ids);
+      delete from public.exam_results where attempt_id = any(v_att_ids);
+      delete from public.exam_attempts where id = any(v_att_ids);
+    end if;
+  end if;
+
+  return jsonb_build_object('success', true, 'message', 'Đã cấp quyền làm lại bài thi thành công.');
+end;
+$$;
+
+-- 5. DELETE EXAM RESULT RPC
+create or replace function public.delete_exam_result(
+  p_result_id text,
+  p_attempt_id text default null
+)
+returns jsonb
+language plpgsql
+security definer
+as $$
+begin
+  if p_attempt_id is not null then
+    update public.exam_attempts
+    set status = 'cancelled', score = 0, percentage = 0
+    where id = p_attempt_id::uuid;
+
+    delete from public.attempt_answers where attempt_id = p_attempt_id::uuid;
+    delete from public.exam_results where attempt_id = p_attempt_id::uuid;
+    delete from public.exam_attempts where id = p_attempt_id::uuid;
+  end if;
+
+  delete from public.exam_results where id = p_result_id::uuid;
+
+  return jsonb_build_object('success', true, 'message', 'Đã xóa kết quả thi thành công.');
+end;
+$$;
+
 -- ==============================================================================
 -- 10. AI EXAM GENERATION & LEGAL REGULATIONS (CV 7991 & GDPT 2018)
 -- ==============================================================================

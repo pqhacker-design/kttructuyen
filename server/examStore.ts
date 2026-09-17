@@ -38,7 +38,7 @@ interface ServerExamQuestion {
 interface ServerExam {
   id: string;
   title: string;
-  grade: number;
+  grade?: number;
   duration_minutes: number;
   total_points: number;
   questions: ServerExamQuestion[];
@@ -226,19 +226,39 @@ class ExamStore {
     this.saveSession(demoSession, demoExam, DEMO_QUESTIONS);
   }
 
+  public saveExam(examData: any) {
+    if (!examData || !examData.id) return;
+    this.exams.set(examData.id, {
+      ...examData,
+      questions: examData.questions || [],
+    });
+  }
+
   public saveSession(session: any, examData?: any, questionsData?: ServerExamQuestion[]) {
     const cleanedCode = (session.access_code || '').trim().toUpperCase();
     const sessionId = session.id;
 
-    if (examData) {
-      this.exams.set(examData.id, {
-        ...examData,
-        questions: questionsData || examData.questions || [],
+    const exam = examData || session.exam;
+    const questions = questionsData || exam?.questions || session.questions || [];
+
+    if (exam && exam.id) {
+      this.exams.set(exam.id, {
+        ...exam,
+        questions,
+      });
+    } else if (session.exam_id) {
+      this.exams.set(session.exam_id, {
+        id: session.exam_id,
+        title: session.title,
+        duration_minutes: session.duration_minutes,
+        total_points: session.total_points || 10,
+        questions,
       });
     }
 
     const sessionRecord = {
       ...session,
+      exam_id: session.exam_id || exam?.id,
       access_code: cleanedCode,
     };
 
@@ -273,21 +293,36 @@ class ExamStore {
 
   public isStudentAllowedRetake(sessionId: string, studentCode: string): boolean {
     const cleanCode = (studentCode || '').trim().toUpperCase();
-    const set = this.allowedRetakes.get(sessionId);
-    return Boolean(set && set.has(cleanCode));
+    const session = this.getSessionById(sessionId) || this.getSessionByCode(sessionId);
+    const keysToCheck = [sessionId];
+    if (session?.id) keysToCheck.push(session.id);
+    if (session?.access_code) keysToCheck.push(session.access_code.trim().toUpperCase());
+
+    for (const key of keysToCheck) {
+      const set = this.allowedRetakes.get(key);
+      if (set && set.has(cleanCode)) return true;
+    }
+    return false;
   }
 
   public allowRetake(sessionId: string, studentCode: string, attemptId?: string) {
     const cleanCode = (studentCode || '').trim().toUpperCase();
-    if (!this.allowedRetakes.has(sessionId)) {
-      this.allowedRetakes.set(sessionId, new Set());
+    const session = this.getSessionById(sessionId) || this.getSessionByCode(sessionId);
+    const keysToRegister = new Set<string>([sessionId]);
+    if (session?.id) keysToRegister.add(session.id);
+    if (session?.access_code) keysToRegister.add(session.access_code.trim().toUpperCase());
+
+    for (const key of keysToRegister) {
+      if (!this.allowedRetakes.has(key)) {
+        this.allowedRetakes.set(key, new Set());
+      }
+      this.allowedRetakes.get(key)!.add(cleanCode);
     }
-    this.allowedRetakes.get(sessionId)!.add(cleanCode);
 
     // Remove matching attempts from server memory
     for (const [id, att] of this.attempts.entries()) {
       if (
-        att.exam_session_id === sessionId &&
+        (att.exam_session_id === sessionId || (session && att.exam_session_id === session.id)) &&
         ((att.student_code || '').trim().toUpperCase() === cleanCode || id === attemptId)
       ) {
         this.attempts.delete(id);
@@ -296,27 +331,37 @@ class ExamStore {
     }
 
     // Remove matching result from server memory
-    const curResults = this.results.get(sessionId) || [];
-    const filtered = curResults.filter(
-      (r) =>
-        (r.student_code || '').trim().toUpperCase() !== cleanCode &&
-        (!attemptId || r.attempt_id !== attemptId)
-    );
-    this.results.set(sessionId, filtered);
+    const keys = Array.from(keysToRegister);
+    for (const k of keys) {
+      const curResults = this.results.get(k) || [];
+      const filtered = curResults.filter(
+        (r) =>
+          (r.student_code || '').trim().toUpperCase() !== cleanCode &&
+          (!attemptId || r.attempt_id !== attemptId)
+      );
+      this.results.set(k, filtered);
+    }
   }
 
   public deleteResult(sessionId: string, resultId: string, attemptId?: string) {
     let studentCode = '';
-    const curResults = this.results.get(sessionId) || [];
-    const target = curResults.find((r) => r.id === resultId || r.attempt_id === attemptId);
-    if (target?.student_code) {
-      studentCode = target.student_code.trim().toUpperCase();
-    }
+    const session = this.getSessionById(sessionId) || this.getSessionByCode(sessionId);
+    const keysToRegister = new Set<string>([sessionId]);
+    if (session?.id) keysToRegister.add(session.id);
+    if (session?.access_code) keysToRegister.add(session.access_code.trim().toUpperCase());
 
-    const filtered = curResults.filter(
-      (r) => r.id !== resultId && (!attemptId || r.attempt_id !== attemptId)
-    );
-    this.results.set(sessionId, filtered);
+    for (const k of keysToRegister) {
+      const curResults = this.results.get(k) || [];
+      const target = curResults.find((r) => r.id === resultId || r.attempt_id === attemptId);
+      if (target?.student_code) {
+        studentCode = target.student_code.trim().toUpperCase();
+      }
+
+      const filtered = curResults.filter(
+        (r) => r.id !== resultId && (!attemptId || r.attempt_id !== attemptId)
+      );
+      this.results.set(k, filtered);
+    }
 
     if (attemptId) {
       this.attempts.delete(attemptId);
@@ -325,10 +370,12 @@ class ExamStore {
 
     // Also mark as eligible for retake if student wants to try again
     if (studentCode) {
-      if (!this.allowedRetakes.has(sessionId)) {
-        this.allowedRetakes.set(sessionId, new Set());
+      for (const k of keysToRegister) {
+        if (!this.allowedRetakes.has(k)) {
+          this.allowedRetakes.set(k, new Set());
+        }
+        this.allowedRetakes.get(k)!.add(studentCode);
       }
-      this.allowedRetakes.get(sessionId)!.add(studentCode);
     }
   }
 
@@ -417,15 +464,47 @@ class ExamStore {
     sessionId: string,
     userAnswers: Record<string, any>,
     studentName?: string,
-    studentCode?: string
+    studentCode?: string,
+    fallbackExamId?: string,
+    fallbackQuestions?: any[]
   ): { success: boolean; result?: ExamResult; message?: string } {
-    const session = this.getSessionById(sessionId) || this.getSessionByCode(sessionId);
+    let session = this.getSessionById(sessionId) || this.getSessionByCode(sessionId);
     if (!session) {
-      return { success: false, message: 'Phòng thi không tồn tại trên hệ thống.' };
+      // Create fallback session record if not found
+      session = {
+        id: sessionId,
+        title: 'Kỳ thi',
+        access_code: sessionId,
+        duration_minutes: 45,
+        exam_id: fallbackExamId,
+      };
+      this.sessions.set(sessionId, session);
     }
 
-    const exam = this.getExam(session.exam_id) || this.exams.values().next().value;
-    const questions: ServerExamQuestion[] = exam?.questions || DEMO_QUESTIONS;
+    const exam = this.getExam(session.exam_id) || (fallbackExamId ? this.getExam(fallbackExamId) : null);
+    let questions: ServerExamQuestion[] = exam?.questions || [];
+
+    // If no questions found or question IDs don't match student's answers, look across all stored exams
+    const answerQuestionIds = Object.keys(userAnswers || {});
+    if (answerQuestionIds.length > 0 && (!questions.length || !questions.some((q) => answerQuestionIds.includes(q.id)))) {
+      for (const ex of this.exams.values()) {
+        const exQuestions = ex.questions || [];
+        if (exQuestions.some((q) => answerQuestionIds.includes(q.id))) {
+          questions = exQuestions;
+          break;
+        }
+      }
+    }
+
+    // If still empty and client provided fallback questions
+    if ((!questions || questions.length === 0) && fallbackQuestions && fallbackQuestions.length > 0) {
+      questions = fallbackQuestions;
+    }
+
+    // Last resort fallback
+    if (!questions || questions.length === 0) {
+      questions = this.exams.values().next().value?.questions || DEMO_QUESTIONS;
+    }
 
     let totalPoints = 0;
     let earnedPoints = 0;
@@ -692,6 +771,12 @@ class ExamStore {
     };
 
     this.addResult(result);
+
+    // Consume retake permission once successfully submitted
+    const cleanStudentCode = resolvedStudentCode.trim().toUpperCase();
+    if (session?.id) this.allowedRetakes.get(session.id)?.delete(cleanStudentCode);
+    if (session?.access_code) this.allowedRetakes.get(session.access_code.trim().toUpperCase())?.delete(cleanStudentCode);
+    if (sessionId) this.allowedRetakes.get(sessionId)?.delete(cleanStudentCode);
 
     return {
       success: true,

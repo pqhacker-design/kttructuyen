@@ -338,11 +338,21 @@ export async function deleteExamResult(
     try {
       const supabase = getSupabase();
       if (attemptId) {
+        // Mark as cancelled first so RPC join checks immediately pass even before delete finishes
+        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).eq('id', attemptId);
         await supabase.from('attempt_answers').delete().eq('attempt_id', attemptId);
         await supabase.from('exam_results').delete().eq('attempt_id', attemptId);
         await supabase.from('exam_attempts').delete().eq('id', attemptId);
       }
       await supabase.from('exam_results').delete().eq('id', resultId);
+
+      // Attempt RPC if available
+      try {
+        await supabase.rpc('delete_exam_result', {
+          p_result_id: resultId,
+          p_attempt_id: attemptId || null,
+        });
+      } catch {}
     } catch (e) {
       console.warn('Supabase delete error:', e);
     }
@@ -376,10 +386,18 @@ export async function allowStudentRetake(
     try {
       const supabase = getSupabase();
       if (attemptId) {
+        // Mark as cancelled first to clear join locks
+        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).eq('id', attemptId);
         await supabase.from('attempt_answers').delete().eq('attempt_id', attemptId);
         await supabase.from('exam_results').delete().eq('attempt_id', attemptId);
         await supabase.from('exam_attempts').delete().eq('id', attemptId);
       } else if (studentCode) {
+        await supabase
+          .from('exam_attempts')
+          .update({ status: 'cancelled', score: 0, percentage: 0 })
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', studentCode.trim());
+
         const { data: atts } = await supabase
           .from('exam_attempts')
           .select('id')
@@ -392,6 +410,15 @@ export async function allowStudentRetake(
           await supabase.from('exam_attempts').delete().in('id', ids);
         }
       }
+
+      // Attempt RPC if available
+      try {
+        await supabase.rpc('allow_student_retake', {
+          p_session_id: sessionId,
+          p_student_code: studentCode,
+          p_attempt_id: attemptId || null,
+        });
+      } catch {}
     } catch (e) {
       console.warn('Supabase allow retake error:', e);
     }

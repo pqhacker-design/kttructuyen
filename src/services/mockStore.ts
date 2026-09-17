@@ -537,7 +537,15 @@ export const mockStore = {
     storeState.attempts[attempt.id] = attempt;
     persistStore();
   },
+  addAttempt: (attempt: ExamAttempt) => {
+    if (!storeState.attempts) storeState.attempts = {};
+    storeState.attempts[attempt.id] = attempt;
+    persistStore();
+  },
   getAttempt: (id: string): ExamAttempt | undefined => {
+    return (storeState.attempts || {})[id];
+  },
+  getAttemptById: (id: string): ExamAttempt | undefined => {
     return (storeState.attempts || {})[id];
   },
   getAttemptsBySessionAndStudent: (sessionId: string, studentCode: string): ExamAttempt[] => {

@@ -1094,6 +1094,46 @@ app.post('/api/exam-sessions/sync', (req, res) => {
   }
 });
 
+// POST /api/exam-sessions/sync-all - Sync all sessions and exams to server
+app.post('/api/exam-sessions/sync-all', (req, res) => {
+  try {
+    const { sessions, exams } = req.body;
+    if (Array.isArray(exams)) {
+      for (const ex of exams) {
+        if (ex && ex.id) {
+          serverExamStore.saveExam(ex);
+        }
+      }
+    }
+    if (Array.isArray(sessions)) {
+      for (const sess of sessions) {
+        if (sess && sess.id) {
+          const ex = sess.exam || (Array.isArray(exams) ? exams.find((e: any) => e.id === sess.exam_id) : undefined);
+          serverExamStore.saveSession(sess, ex, ex?.questions || sess.questions);
+        }
+      }
+    }
+    res.json({ success: true, message: 'Đồng bộ toàn bộ kỳ thi và đề thi lên máy chủ thành công' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/exam-sessions/:sessionId/check-retake - Verify if a student has retake permission
+app.get('/api/exam-sessions/:sessionId/check-retake', (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const studentCode = (req.query.studentCode as string || '').trim();
+    if (!studentCode) {
+      return res.json({ success: true, isRetakeAllowed: false });
+    }
+    const isAllowed = serverExamStore.isStudentAllowedRetake(sessionId, studentCode);
+    res.json({ success: true, isRetakeAllowed: isAllowed });
+  } catch (err: any) {
+    res.json({ success: true, isRetakeAllowed: false });
+  }
+});
+
 // POST /api/exam-sessions/join - Cross-browser student join & eligibility verification
 app.post('/api/exam-sessions/join', async (req, res) => {
   try {
@@ -1292,7 +1332,7 @@ app.post('/api/exam-sessions/join', async (req, res) => {
 app.post('/api/exam-sessions/:sessionId/submit', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const { attemptId, answers, studentName, studentCode } = req.body;
+    const { attemptId, answers, studentName, studentCode, examId, questions } = req.body;
 
     if (!attemptId) {
       return res.status(400).json({ success: false, error: 'Thiếu attemptId' });
@@ -1303,7 +1343,9 @@ app.post('/api/exam-sessions/:sessionId/submit', async (req, res) => {
       sessionId,
       answers || {},
       studentName,
-      studentCode
+      studentCode,
+      examId,
+      questions
     );
 
     if (!grading.success || !grading.result) {
@@ -1624,6 +1666,7 @@ app.delete('/api/exam-sessions/:sessionId/results/:resultId', async (req, res) =
     const admin = getSupabaseAdmin();
     if (admin) {
       if (attemptId) {
+        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0 }).eq('id', attemptId);
         await admin.from('attempt_answers').delete().eq('attempt_id', attemptId);
         await admin.from('exam_results').delete().eq('attempt_id', attemptId);
         await admin.from('exam_attempts').delete().eq('id', attemptId);
@@ -1653,10 +1696,17 @@ app.post('/api/exam-sessions/:sessionId/allow-retake', async (req, res) => {
     const admin = getSupabaseAdmin();
     if (admin) {
       if (attemptId) {
+        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0 }).eq('id', attemptId);
         await admin.from('attempt_answers').delete().eq('attempt_id', attemptId);
         await admin.from('exam_results').delete().eq('attempt_id', attemptId);
         await admin.from('exam_attempts').delete().eq('id', attemptId);
       } else if (studentCode) {
+        await admin
+          .from('exam_attempts')
+          .update({ status: 'cancelled', score: 0 })
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', studentCode.trim());
+
         const { data: attempts } = await admin
           .from('exam_attempts')
           .select('id')

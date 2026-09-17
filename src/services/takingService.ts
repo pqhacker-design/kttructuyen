@@ -74,6 +74,50 @@ export async function joinExamWithAccessCode(
   studentCode: string
 ): Promise<JoinExamResponse> {
   const cleanedCode = accessCode.trim().toUpperCase();
+  const cleanStudentCode = studentCode.trim().toUpperCase();
+  const cleanStudentName = studentName.trim();
+
+  // 1. Try server-side authoritative join first (handles cross-browser synchronization, retake permission, and consistent questions)
+  try {
+    const sRes = await fetch('/api/exam-sessions/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accessCode: cleanedCode,
+        studentName: cleanStudentName,
+        studentCode: cleanStudentCode,
+      }),
+    });
+    if (sRes.ok) {
+      const sData = await sRes.json();
+      if (sData.success && sData.session && sData.attempt && sData.questions) {
+        if (sData.isRetakeAllowed) {
+          mockStore.resetStudentAttempt(sData.session.id, cleanStudentCode);
+        }
+        mockStore.addAttempt(sData.attempt);
+        return {
+          success: true,
+          message: 'Tham gia kỳ thi thành công',
+          session: sData.session,
+          questions: sData.questions,
+          attempt: sData.attempt,
+          existingAnswers: sData.existingAnswers || {},
+        };
+      }
+    } else if (sRes.status === 403) {
+      const sData = await sRes.json().catch(() => ({}));
+      if (sData.code === 'MAX_ATTEMPTS_REACHED') {
+        return {
+          success: false,
+          code: 'MAX_ATTEMPTS_REACHED',
+          message: sData.error || 'Bạn đã tham gia đủ số lần cho phép.',
+          lastAttempt: sData.lastAttempt,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Server join call error, falling back:', err);
+  }
 
   if (!isSupabaseConfigured()) {
     const session = mockStore.getSessionByCode(cleanedCode);
@@ -126,23 +170,38 @@ export async function joinExamWithAccessCode(
       }
     }
 
+    // Check if teacher granted retake permission on server
+    let isRetakePermitted = false;
+    try {
+      const retakeRes = await fetch(`/api/exam-sessions/${encodeURIComponent(session.id)}/check-retake?studentCode=${encodeURIComponent(cleanStudentCode)}`);
+      if (retakeRes.ok) {
+        const retakeData = await retakeRes.json();
+        isRetakePermitted = Boolean(retakeData.isRetakeAllowed);
+      }
+    } catch {}
+
     // Check previous attempts in mockStore
-    const prevMockAttempts = mockStore.getAttemptsBySessionAndStudent(session.id, studentCode.trim());
+    const prevMockAttempts = mockStore.getAttemptsBySessionAndStudent(session.id, cleanStudentCode);
     const submittedMockCount = prevMockAttempts.filter(a => a.status === 'submitted' || a.status === 'graded').length;
-    if (submittedMockCount >= (session.max_attempts || 1)) {
-      const lastMock = prevMockAttempts.filter(a => a.status === 'submitted' || a.status === 'graded').pop();
-      return {
-        success: false,
-        code: 'MAX_ATTEMPTS_REACHED',
-        message: `Bạn đã tham gia đủ số lần cho phép (${session.max_attempts || 1} lần). Điểm số bài thi của bạn đã được ghi nhận trong bảng thống kê của giáo viên.`,
-        lastAttempt: lastMock ? {
-          score: lastMock.score,
-          max_score: lastMock.max_score,
-          percentage: lastMock.percentage,
-          submitted_at: lastMock.submitted_at,
-          status: lastMock.status,
-        } : undefined,
-      };
+
+    if (isRetakePermitted) {
+      mockStore.resetStudentAttempt(session.id, cleanStudentCode);
+    } else {
+      if (submittedMockCount >= (session.max_attempts || 1)) {
+        const lastMock = prevMockAttempts.filter(a => a.status === 'submitted' || a.status === 'graded').pop();
+        return {
+          success: false,
+          code: 'MAX_ATTEMPTS_REACHED',
+          message: `Bạn đã tham gia đủ số lần cho phép (${session.max_attempts || 1} lần). Điểm số bài thi của bạn đã được ghi nhận trong bảng thống kê của giáo viên.`,
+          lastAttempt: lastMock ? {
+            score: lastMock.score,
+            max_score: lastMock.max_score,
+            percentage: lastMock.percentage,
+            submitted_at: lastMock.submitted_at,
+            status: lastMock.status,
+          } : undefined,
+        };
+      }
     }
 
     const exam = session.exam || mockStore.getExamById(session.exam_id);
@@ -342,7 +401,16 @@ export async function joinExamWithAccessCode(
     (a) => a.status === 'submitted' || a.status === 'graded'
   ).length;
 
-  if (submittedCount >= session.max_attempts) {
+  let isRetakePermittedInDb = false;
+  try {
+    const rRes = await fetch(`/api/exam-sessions/${encodeURIComponent(session.id)}/check-retake?studentCode=${encodeURIComponent(studentCode.trim())}`);
+    if (rRes.ok) {
+      const rData = await rRes.json();
+      isRetakePermittedInDb = Boolean(rData.isRetakeAllowed);
+    }
+  } catch {}
+
+  if (!isRetakePermittedInDb && submittedCount >= session.max_attempts) {
     const lastSubmitted = (prevAttempts || [])
       .filter((a) => a.status === 'submitted' || a.status === 'graded')
       .pop();
@@ -559,13 +627,76 @@ export async function autoSaveAnswer(
 // Final submission and grading
 export async function submitExamAttempt(
   attemptId: string,
-  answers: Record<string, { selected_option_id?: string; answer_text?: string; statement_answers?: Record<string, boolean> }>
+  answers: Record<string, { selected_option_id?: string; answer_text?: string; statement_answers?: Record<string, boolean> }>,
+  sessionId?: string,
+  studentName?: string,
+  studentCode?: string,
+  examId?: string,
+  clientQuestions?: any[]
 ): Promise<{ success: boolean; result?: ExamResult; message?: string }> {
+  const resolvedSessionId = sessionId || 'session-toan-10';
+
+  // 1. Try authoritative server grading first (centralized, accurate, cross-browser questions and state)
+  try {
+    const sRes = await fetch(`/api/exam-sessions/${encodeURIComponent(resolvedSessionId)}/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        attemptId,
+        answers,
+        studentName,
+        studentCode,
+        examId,
+        questions: clientQuestions,
+      }),
+    });
+    if (sRes.ok) {
+      const sData = await sRes.json();
+      if (sData.success && sData.result) {
+        mockStore.addResult(sData.result);
+        return {
+          success: true,
+          result: sData.result,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Server submit attempt failed, falling back:', err);
+  }
+
   if (!isSupabaseConfigured()) {
-    // 1. Fetch questions from active exam in mock store
-    const session = mockStore.getSessions()[0];
-    const exam = session?.exam || mockStore.getExams()[0];
-    const examQuestions = exam?.questions || [];
+    // 1. Accurately fetch questions from the target session and exam in mock store
+    let session = (sessionId ? mockStore.getSessionById(sessionId) : null) || mockStore.getSessions().find(s => s.id === sessionId);
+    if (!session && attemptId) {
+      const att = mockStore.getAttemptById(attemptId);
+      if (att?.exam_session_id) {
+        session = mockStore.getSessionById(att.exam_session_id);
+      }
+    }
+    if (!session) {
+      session = mockStore.getSessions()[0];
+    }
+
+    let exam = (examId ? mockStore.getExamById(examId) : null) || (session?.exam_id ? mockStore.getExamById(session.exam_id) : null) || session?.exam;
+    
+    // If exam not matched, inspect which exam in mockStore contains the answered question IDs
+    const answerIds = Object.keys(answers || {});
+    if (!exam && answerIds.length > 0) {
+      for (const ex of mockStore.getExams()) {
+        if ((ex.questions || []).some(q => answerIds.includes(q.id))) {
+          exam = ex;
+          break;
+        }
+      }
+    }
+    if (!exam) {
+      exam = mockStore.getExams()[0];
+    }
+
+    let examQuestions: any[] = exam?.questions || [];
+    if ((!examQuestions || examQuestions.length === 0) && clientQuestions && clientQuestions.length > 0) {
+      examQuestions = clientQuestions;
+    }
 
     let earnedPoints = 0;
     let totalPoints = 0;

@@ -28,6 +28,7 @@ import { PrintPreviewModal } from './components/PrintPreviewModal';
 import { Profile, Exam } from './types';
 import { getCurrentProfile, onAuthStateChange, isSupabaseConfigured, signOut } from './lib/supabase';
 import { JoinExamResponse, joinExamWithAccessCode } from './services/takingService';
+import { syncAllSessionsAndExamsToBackend } from './services/sessionService';
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState<NavTab>(() => {
@@ -135,6 +136,9 @@ export default function App() {
   useEffect(() => {
     // Initial profile fetch
     checkAuth(true);
+
+    // Initial background sync to backend
+    syncAllSessionsAndExamsToBackend();
 
     // Listen to Supabase auth events (e.g. token refresh when switching tabs or regaining focus)
     const { data: authListener } = onAuthStateChange((event, session) => {
