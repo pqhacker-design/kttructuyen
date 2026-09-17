@@ -573,6 +573,46 @@ export const mockStore = {
     return storeState.results.filter(r => r.exam_session_id === sessionId);
   },
   getAllResults: (): ExamResult[] => [...storeState.results],
+  deleteResult: (resultId: string, attemptId?: string): boolean => {
+    const targetAttemptId = attemptId || storeState.results.find(r => r.id === resultId)?.attempt_id;
+    storeState.results = storeState.results.filter(r => r.id !== resultId && (!targetAttemptId || r.attempt_id !== targetAttemptId));
+    if (targetAttemptId && storeState.attempts) {
+      const att = storeState.attempts[targetAttemptId];
+      if (att) {
+        const session = storeState.sessions.find(s => s.id === att.exam_session_id);
+        if (session && (session.attempts_count || 0) > 0) {
+          session.attempts_count = Math.max(0, (session.attempts_count || 1) - 1);
+        }
+      }
+      delete storeState.attempts[targetAttemptId];
+      if (storeState.answers) {
+        delete storeState.answers[targetAttemptId];
+      }
+    }
+    persistStore();
+    return true;
+  },
+  resetStudentAttempt: (sessionId: string, studentCode: string, attemptId?: string): boolean => {
+    const cleanCode = studentCode.trim().toLowerCase();
+    // Remove attempts for this student in this session
+    if (storeState.attempts) {
+      Object.keys(storeState.attempts).forEach(id => {
+        const a = storeState.attempts[id];
+        if (a && a.exam_session_id === sessionId && (a.student_code || '').trim().toLowerCase() === cleanCode) {
+          delete storeState.attempts[id];
+          if (storeState.answers) {
+            delete storeState.answers[id];
+          }
+        }
+      });
+    }
+    // Remove from results
+    storeState.results = storeState.results.filter(
+      r => !(r.exam_session_id === sessionId && (r.student_code || '').trim().toLowerCase() === cleanCode)
+    );
+    persistStore();
+    return true;
+  },
 
   // Matrices
   getMatrices: (): Matrix[] => [...storeState.matrices],

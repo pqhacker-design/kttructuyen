@@ -1257,6 +1257,94 @@ app.post('/api/exam-sessions/:sessionId/sync-attempts', async (req, res) => {
   }
 });
 
+// DELETE /api/exam-sessions/:sessionId/results/:resultId - Delete an exam result & attempt
+app.delete('/api/exam-sessions/:sessionId/results/:resultId', async (req, res) => {
+  try {
+    const { sessionId, resultId } = req.params;
+    const attemptId = req.query.attemptId as string | undefined;
+    const admin = getSupabaseAdmin();
+
+    if (admin) {
+      if (attemptId) {
+        await admin.from('attempt_answers').delete().eq('attempt_id', attemptId);
+        await admin.from('exam_results').delete().eq('attempt_id', attemptId);
+        await admin.from('exam_attempts').delete().eq('id', attemptId);
+      }
+      // Also delete by resultId if it's a valid uuid or matches
+      await admin.from('exam_results').delete().eq('id', resultId);
+    }
+
+    res.json({ success: true, message: 'Đã xóa kết quả thi thành công' });
+  } catch (err: any) {
+    console.error('Error deleting exam result:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/exam-sessions/:sessionId/allow-retake - Reset student attempt to allow retake
+app.post('/api/exam-sessions/:sessionId/allow-retake', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { studentCode, attemptId } = req.body;
+    const admin = getSupabaseAdmin();
+
+    if (admin) {
+      if (attemptId) {
+        await admin.from('attempt_answers').delete().eq('attempt_id', attemptId);
+        await admin.from('exam_results').delete().eq('attempt_id', attemptId);
+        await admin.from('exam_attempts').delete().eq('id', attemptId);
+      } else if (studentCode) {
+        // Find attempts for this student in this session
+        const { data: attempts } = await admin
+          .from('exam_attempts')
+          .select('id')
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', studentCode.trim());
+
+        const ids = (attempts || []).map((a: any) => a.id);
+        if (ids.length > 0) {
+          await admin.from('attempt_answers').delete().in('attempt_id', ids);
+          await admin.from('exam_results').delete().in('attempt_id', ids);
+          await admin.from('exam_attempts').delete().in('id', ids);
+        }
+      }
+    }
+
+    res.json({ success: true, message: 'Đã cấp quyền làm lại bài thi thành công' });
+  } catch (err: any) {
+    console.error('Error granting retake permission:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/exam-sessions/:sessionId/attempts/:attemptId/details - Audit log & details of an attempt
+app.get('/api/exam-sessions/:sessionId/attempts/:attemptId/details', async (req, res) => {
+  try {
+    const { sessionId, attemptId } = req.params;
+    const admin = getSupabaseAdmin();
+
+    if (!admin) {
+      return res.json({ success: false, message: 'Chưa cấu hình Supabase Admin' });
+    }
+
+    const { data: attempt } = await admin
+      .from('exam_attempts')
+      .select('*, session:exam_sessions(title, access_code, duration_minutes, exam_id)')
+      .eq('id', attemptId)
+      .single();
+
+    const { data: answers } = await admin
+      .from('attempt_answers')
+      .select('*')
+      .eq('attempt_id', attemptId);
+
+    res.json({ success: true, attempt, answers: answers || [] });
+  } catch (err: any) {
+    console.error('Error fetching attempt details:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // POST /api/test/user-isolation - Run the comprehensive User Isolation Test Suite
 app.post('/api/test/user-isolation', async (req, res) => {
   try {

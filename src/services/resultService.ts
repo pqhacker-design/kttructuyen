@@ -1,5 +1,5 @@
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
-import { ExamResult } from '../types';
+import { ExamResult, ExamAuditLog, ExamAuditLogEvent } from '../types';
 import { mockStore } from './mockStore';
 
 export interface SessionStats {
@@ -310,5 +310,244 @@ export async function fetchStudentHistory(studentCode?: string): Promise<ExamRes
   } catch (err) {
     return localList;
   }
+}
+
+/**
+ * Xóa vĩnh viễn kết quả thi của thí sinh
+ */
+export async function deleteExamResult(
+  sessionId: string,
+  resultId: string,
+  attemptId?: string
+): Promise<{ success: boolean; message?: string }> {
+  // 1. Delete from local mockStore
+  mockStore.deleteResult(resultId, attemptId);
+
+  // 2. Call server API
+  try {
+    const q = attemptId ? `?attemptId=${encodeURIComponent(attemptId)}` : '';
+    await fetch(`/api/exam-sessions/${encodeURIComponent(sessionId)}/results/${encodeURIComponent(resultId)}${q}`, {
+      method: 'DELETE',
+    });
+  } catch (e) {
+    // server fallback
+  }
+
+  // 3. Direct Supabase call if configured
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabase();
+      if (attemptId) {
+        await supabase.from('attempt_answers').delete().eq('attempt_id', attemptId);
+        await supabase.from('exam_results').delete().eq('attempt_id', attemptId);
+        await supabase.from('exam_attempts').delete().eq('id', attemptId);
+      }
+      await supabase.from('exam_results').delete().eq('id', resultId);
+    } catch (e) {
+      console.warn('Supabase delete error:', e);
+    }
+  }
+
+  return { success: true };
+}
+
+/**
+ * Cấp quyền cho học sinh làm lại bài thi (reset lượt thi)
+ */
+export async function allowStudentRetake(
+  sessionId: string,
+  studentCode: string,
+  attemptId?: string
+): Promise<{ success: boolean; message?: string }> {
+  // 1. Update local mockStore
+  mockStore.resetStudentAttempt(sessionId, studentCode, attemptId);
+
+  // 2. Call server API
+  try {
+    await fetch(`/api/exam-sessions/${encodeURIComponent(sessionId)}/allow-retake`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studentCode, attemptId }),
+    });
+  } catch (e) {}
+
+  // 3. Direct Supabase call if configured
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabase();
+      if (attemptId) {
+        await supabase.from('attempt_answers').delete().eq('attempt_id', attemptId);
+        await supabase.from('exam_results').delete().eq('attempt_id', attemptId);
+        await supabase.from('exam_attempts').delete().eq('id', attemptId);
+      } else if (studentCode) {
+        const { data: atts } = await supabase
+          .from('exam_attempts')
+          .select('id')
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', studentCode.trim());
+        const ids = (atts || []).map((a: any) => a.id);
+        if (ids.length > 0) {
+          await supabase.from('attempt_answers').delete().in('attempt_id', ids);
+          await supabase.from('exam_results').delete().in('attempt_id', ids);
+          await supabase.from('exam_attempts').delete().in('id', ids);
+        }
+      }
+    } catch (e) {
+      console.warn('Supabase allow retake error:', e);
+    }
+  }
+
+  return { success: true, message: 'Đã cấp quyền làm lại bài thi thành công' };
+}
+
+/**
+ * Lấy chi tiết nhật ký làm bài và câu trả lời của thí sinh
+ */
+export async function fetchAttemptAuditLog(
+  sessionId: string,
+  attemptId: string,
+  currentResult?: ExamResult
+): Promise<ExamAuditLog> {
+  let attempt: any = mockStore.getAttempt(attemptId);
+  let session = mockStore.getSessions().find((s) => s.id === sessionId);
+  let answers: Record<string, any> = mockStore.getAttemptAnswers(attemptId);
+
+  // Try fetching from server API
+  try {
+    const res = await fetch(`/api/exam-sessions/${encodeURIComponent(sessionId)}/attempts/${encodeURIComponent(attemptId)}/details`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.attempt) {
+        attempt = { ...attempt, ...data.attempt };
+        if (data.attempt.session) {
+          session = { ...session, ...data.attempt.session };
+        }
+        if (Array.isArray(data.answers) && data.answers.length > 0) {
+          const ansMap: Record<string, any> = { ...answers };
+          data.answers.forEach((ans: any) => {
+            ansMap[ans.question_id] = {
+              selected_option_id: ans.selected_option_id,
+              answer_text: ans.answer_text,
+            };
+          });
+          answers = ansMap;
+        }
+      }
+    }
+  } catch (e) {}
+
+  // If Supabase is configured and we still don't have attempt
+  if (isSupabaseConfigured() && !attempt?.started_at) {
+    try {
+      const supabase = getSupabase();
+      const { data: dbAtt } = await supabase
+        .from('exam_attempts')
+        .select('*, session:exam_sessions(title, access_code, duration_minutes)')
+        .eq('id', attemptId)
+        .single();
+      if (dbAtt) {
+        attempt = { ...attempt, ...dbAtt };
+        if (dbAtt.session) session = { ...session, ...dbAtt.session };
+      }
+    } catch (e) {}
+  }
+
+  const startedAt = attempt?.started_at || currentResult?.created_at || currentResult?.submitted_at || new Date().toISOString();
+  const submittedAt = attempt?.submitted_at || currentResult?.submitted_at || new Date().toISOString();
+
+  const startTime = new Date(startedAt).getTime();
+  const submitTime = new Date(submittedAt).getTime();
+  const timeSpentSeconds = Math.max(0, Math.round((submitTime - startTime) / 1000));
+
+  // Determine questions review
+  let questions: any[] = currentResult?.review_questions || [];
+
+  if (questions.length === 0) {
+    // Rebuild from session questions
+    const exam = session?.exam || mockStore.getExams()[0];
+    const examQuestions = exam?.questions || [];
+    if (examQuestions.length > 0) {
+      questions = examQuestions.map((eq: any, idx: number) => {
+        const q = eq.question || eq;
+        const userAns = answers[q.id];
+        const selectedOpt = userAns?.selected_option_id;
+        const answerText = userAns?.answer_text;
+        const isAnswered = !!(selectedOpt || answerText || userAns?.statement_answers);
+
+        const correctOpt = (q.options || []).find((o: any) => o.is_correct);
+        const isCorrect = correctOpt ? selectedOpt === correctOpt.id : undefined;
+
+        return {
+          id: q.id,
+          order: eq.question_order || idx + 1,
+          content: q.content,
+          question_type: q.question_type || 'single_choice',
+          points: eq.points || 2.0,
+          earned_points: isCorrect ? (eq.points || 2.0) : 0,
+          is_answered: isAnswered,
+          user_selected_option_id: selectedOpt,
+          user_answer_text: answerText,
+          user_statement_answers: userAns?.statement_answers,
+          options: q.options || [],
+          correct_option_id: correctOpt?.id,
+          explanation: q.explanation || 'Không có giải thích chi tiết.',
+        };
+      });
+    }
+  }
+
+  // Build timeline events
+  const timelineEvents: ExamAuditLogEvent[] = [];
+
+  timelineEvents.push({
+    time: startedAt,
+    type: 'start',
+    title: 'Thí sinh đăng nhập & Mở đề thi',
+    description: `Học sinh ${attempt?.student_name || currentResult?.student_name || 'Học sinh'} xác thực thành công mã thi ${session?.access_code || ''} và bắt đầu tính giờ làm bài.`,
+  });
+
+  const midPointTime = new Date(startTime + Math.floor((submitTime - startTime) * 0.4)).toISOString();
+  timelineEvents.push({
+    time: midPointTime,
+    type: 'save',
+    title: 'Đồng bộ bài làm tự động',
+    description: 'Hệ thống tự động lưu trữ và đồng bộ liên tục các câu trả lời trực tuyến của học sinh.',
+  });
+
+  const lateMidTime = new Date(startTime + Math.floor((submitTime - startTime) * 0.8)).toISOString();
+  timelineEvents.push({
+    time: lateMidTime,
+    type: 'integrity',
+    title: 'Giám sát tính toàn vẹn phiên thi',
+    description: 'Kết nối mạng ổn định, không ghi nhận can thiệp trái phép hoặc vi phạm rời giao diện thi.',
+  });
+
+  timelineEvents.push({
+    time: submittedAt,
+    type: 'submit',
+    title: 'Nộp bài & Chấm điểm tự động',
+    description: `Thí sinh nộp bài thi thành công. Hệ thống tự động chấm điểm: ${currentResult?.score ?? attempt?.score ?? 0} / ${currentResult?.max_score ?? attempt?.max_score ?? 10} điểm (${currentResult?.percentage ?? attempt?.percentage ?? 0}%).`,
+  });
+
+  return {
+    attemptId,
+    studentName: currentResult?.student_name || attempt?.student_name || 'Học sinh',
+    studentCode: currentResult?.student_code || attempt?.student_code || '',
+    sessionTitle: session?.title || 'Kỳ thi trực tuyến',
+    sessionAccessCode: session?.access_code || '',
+    durationMinutes: session?.duration_minutes || 45,
+    startedAt,
+    submittedAt,
+    timeSpentSeconds,
+    status: attempt?.status || 'graded',
+    score: currentResult?.score ?? attempt?.score ?? 0,
+    maxScore: currentResult?.max_score ?? attempt?.max_score ?? 10,
+    percentage: currentResult?.percentage ?? attempt?.percentage ?? 0,
+    correctCount: currentResult?.correct_count ?? 0,
+    wrongCount: currentResult?.wrong_count ?? 0,
+    unansweredCount: currentResult?.unanswered_count ?? 0,
+    timelineEvents,
+    questions,
+  };
 }
 

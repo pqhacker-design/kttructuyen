@@ -10,7 +10,11 @@ import {
   CheckCircle2, 
   XCircle,
   FileSpreadsheet,
-  RefreshCw
+  RefreshCw,
+  RotateCcw,
+  FileText,
+  Trash2,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -24,9 +28,17 @@ import {
   Pie, 
   Cell 
 } from 'recharts';
-import { ExamSession, ExamResult, Profile } from '../types';
+import { ExamSession, ExamResult, Profile, ExamAuditLog } from '../types';
 import { fetchExamSessions } from '../services/sessionService';
-import { fetchResultsBySession, calculateSessionAnalytics, syncSessionAttempts } from '../services/resultService';
+import { 
+  fetchResultsBySession, 
+  calculateSessionAnalytics, 
+  syncSessionAttempts,
+  deleteExamResult,
+  allowStudentRetake,
+  fetchAttemptAuditLog
+} from '../services/resultService';
+import { ExamAuditLogModal } from './ExamAuditLogModal';
 
 interface ResultsAnalyticsViewProps {
   currentProfile: Profile | null;
@@ -45,6 +57,24 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Audit log modal state
+  const [selectedAuditLog, setSelectedAuditLog] = useState<ExamAuditLog | null>(null);
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  const [loadingAuditLog, setLoadingAuditLog] = useState(false);
+
+  // Retake confirmation modal state
+  const [retakeTarget, setRetakeTarget] = useState<ExamResult | null>(null);
+  const [isRetakeModalOpen, setIsRetakeModalOpen] = useState(false);
+  const [isRetaking, setIsRetaking] = useState(false);
+
+  // Delete confirmation modal state
+  const [deleteTarget, setDeleteTarget] = useState<ExamResult | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Toast feedback
+  const [actionToast, setActionToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   useEffect(() => {
     loadSessions();
@@ -146,6 +176,101 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
     document.body.removeChild(link);
   };
 
+  // Xem nhật ký thi
+  const handleOpenAuditModal = async (res: ExamResult) => {
+    setIsAuditModalOpen(true);
+    setLoadingAuditLog(true);
+    try {
+      const log = await fetchAttemptAuditLog(selectedSessionId, res.attempt_id, res);
+      setSelectedAuditLog(log);
+    } catch (err: any) {
+      console.error('Error fetching audit log:', err);
+    } finally {
+      setLoadingAuditLog(false);
+    }
+  };
+
+  // Mở modal xác nhận cho làm lại
+  const handleOpenRetakeModal = (res: ExamResult) => {
+    setRetakeTarget(res);
+    setIsRetakeModalOpen(true);
+  };
+
+  // Thực hiện cho làm lại
+  const handleConfirmRetake = async () => {
+    if (!retakeTarget || !selectedSessionId) return;
+    setIsRetaking(true);
+    try {
+      const studentCode = retakeTarget.student_code || '';
+      const attemptId = retakeTarget.attempt_id;
+      await allowStudentRetake(selectedSessionId, studentCode, attemptId);
+
+      const updated = results.filter(
+        (r) => r.id !== retakeTarget.id && r.attempt_id !== retakeTarget.attempt_id
+      );
+      setResults(updated);
+      setAnalytics(calculateSessionAnalytics(updated));
+
+      setIsRetakeModalOpen(false);
+      setRetakeTarget(null);
+      if (isAuditModalOpen) {
+        setIsAuditModalOpen(false);
+      }
+
+      setActionToast({
+        type: 'success',
+        message: `Đã cấp quyền cho học sinh ${retakeTarget.student_name} làm lại bài thi thành công. Học sinh có thể dùng mã phòng để vào làm bài lại.`,
+      });
+      setTimeout(() => setActionToast(null), 5000);
+    } catch (err: any) {
+      setActionToast({
+        type: 'error',
+        message: `Lỗi khi cấp quyền làm lại: ${err.message || 'Không thể xử lý yêu cầu'}`,
+      });
+      setTimeout(() => setActionToast(null), 5000);
+    } finally {
+      setIsRetaking(false);
+    }
+  };
+
+  // Mở modal xác nhận xóa kết quả
+  const handleOpenDeleteModal = (res: ExamResult) => {
+    setDeleteTarget(res);
+    setIsDeleteModalOpen(true);
+  };
+
+  // Thực hiện xóa kết quả
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || !selectedSessionId) return;
+    setIsDeleting(true);
+    try {
+      await deleteExamResult(selectedSessionId, deleteTarget.id, deleteTarget.attempt_id);
+
+      const updated = results.filter(
+        (r) => r.id !== deleteTarget.id && r.attempt_id !== deleteTarget.attempt_id
+      );
+      setResults(updated);
+      setAnalytics(calculateSessionAnalytics(updated));
+
+      setIsDeleteModalOpen(false);
+      setDeleteTarget(null);
+
+      setActionToast({
+        type: 'success',
+        message: `Đã xóa vĩnh viễn kết quả thi của học sinh ${deleteTarget.student_name}.`,
+      });
+      setTimeout(() => setActionToast(null), 5000);
+    } catch (err: any) {
+      setActionToast({
+        type: 'error',
+        message: `Lỗi khi xóa kết quả: ${err.message || 'Không thể xóa'}`,
+      });
+      setTimeout(() => setActionToast(null), 5000);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const filteredResults = results.filter((r) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
@@ -206,6 +331,21 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
         <div className="p-3 bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-xl text-xs font-medium flex items-center space-x-2 animate-fadeIn">
           <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />
           <span>{syncMessage}</span>
+        </div>
+      )}
+
+      {actionToast && (
+        <div className={`p-3.5 rounded-xl text-xs font-medium flex items-center space-x-2.5 animate-fadeIn border shadow-xs ${
+          actionToast.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+            : 'bg-rose-50 border-rose-200 text-rose-900'
+        }`}>
+          {actionToast.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          ) : (
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+          )}
+          <span className="flex-1">{actionToast.message}</span>
         </div>
       )}
 
@@ -305,6 +445,7 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
                   <th className="p-3 text-center">Tỷ lệ</th>
                   <th className="p-3 text-center">Đúng / Sai</th>
                   <th className="p-3 text-right">Thời gian nộp</th>
+                  <th className="p-3 text-center">Thao tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -341,6 +482,42 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
                       <td className="p-3 text-right text-slate-500">
                         {r.submitted_at ? new Date(r.submitted_at).toLocaleString('vi-VN') : '---'}
                       </td>
+                      <td className="p-3 text-center">
+                        <div className="flex items-center justify-center space-x-1.5">
+                          {/* Cho làm lại */}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenRetakeModal(r)}
+                            title="Cho học sinh làm lại bài thi"
+                            className="inline-flex items-center space-x-1 px-2.5 py-1 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Cho làm lại</span>
+                          </button>
+
+                          {/* Xem nhật ký thi */}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenAuditModal(r)}
+                            title="Xem nhật ký bài làm & chi tiết bài thi"
+                            className="inline-flex items-center space-x-1 px-2.5 py-1 text-xs font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200/80 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            <span>Xem nhật ký</span>
+                          </button>
+
+                          {/* Xóa kết quả */}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDeleteModal(r)}
+                            title="Xóa kết quả thi của thí sinh"
+                            className="inline-flex items-center space-x-1 px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/80 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Xóa</span>
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}
@@ -349,6 +526,145 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Modal Xem nhật ký thi & Chi tiết bài làm */}
+      <ExamAuditLogModal
+        isOpen={isAuditModalOpen}
+        onClose={() => {
+          setIsAuditModalOpen(false);
+          setSelectedAuditLog(null);
+        }}
+        auditLog={selectedAuditLog}
+        loading={loadingAuditLog}
+        onAllowRetake={(code, attemptId) => {
+          const target = results.find(
+            (r) => r.attempt_id === attemptId || r.student_code === code
+          );
+          if (target) {
+            handleOpenRetakeModal(target);
+          }
+        }}
+      />
+
+      {/* Modal Xác nhận Cho làm lại */}
+      {isRetakeModalOpen && retakeTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-xl shrink-0">
+                <RotateCcw className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-slate-900">Cho làm lại bài thi</h3>
+                <p className="text-xs text-slate-500">Cấp quyền để thí sinh bắt đầu lượt thi mới</p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2 text-slate-600 leading-relaxed">
+              <div className="flex justify-between py-1 border-b border-slate-200/60 font-medium">
+                <span className="text-slate-500">Thí sinh:</span>
+                <span className="font-bold text-slate-900">{retakeTarget.student_name}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60 font-medium">
+                <span className="text-slate-500">Mã HS / SBD:</span>
+                <span className="font-mono font-bold text-slate-900">{retakeTarget.student_code || '---'}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-200/60 font-medium">
+                <span className="text-slate-500">Điểm hiện tại:</span>
+                <span className="font-bold text-indigo-600">
+                  {retakeTarget.score} / {retakeTarget.max_score} đ ({retakeTarget.percentage}%)
+                </span>
+              </div>
+
+              <p className="pt-2 text-slate-600">
+                Khi xác nhận, học sinh sẽ được <strong>mở khóa lượt thi</strong> để nhập lại mã phòng thi 
+                <strong className="font-mono text-indigo-700 ml-1 px-1 bg-indigo-50 rounded border border-indigo-200">
+                  {selectedSession?.access_code || '---'}
+                </strong> và làm bài thi lại từ đầu.
+              </p>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                disabled={isRetaking}
+                onClick={() => {
+                  setIsRetakeModalOpen(false);
+                  setRetakeTarget(null);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                disabled={isRetaking}
+                onClick={handleConfirmRetake}
+                className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-xs flex items-center space-x-1.5 cursor-pointer disabled:bg-indigo-400"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${isRetaking ? 'animate-spin' : ''}`} />
+                <span>{isRetaking ? 'Đang xử lý...' : 'Xác nhận Cho làm lại'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Xác nhận Xóa kết quả */}
+      {isDeleteModalOpen && deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 p-6 space-y-4">
+            <div className="flex items-center space-x-3">
+              <div className="p-2.5 bg-rose-100 text-rose-700 rounded-xl shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-slate-900">Xác nhận xóa kết quả thi</h3>
+                <p className="text-xs text-slate-500">Hành động này không thể hoàn tác</p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-rose-50/60 rounded-xl border border-rose-200 text-xs space-y-2 text-slate-700 leading-relaxed">
+              <p>
+                Bạn có chắc chắn muốn xóa vĩnh viễn kết quả thi của thí sinh:
+              </p>
+              <div className="bg-white p-3 rounded-lg border border-rose-200 space-y-1">
+                <div className="font-bold text-slate-900">{deleteTarget.student_name}</div>
+                <div className="text-[11px] text-slate-500 font-mono">Mã HS / SBD: {deleteTarget.student_code || '---'}</div>
+                <div className="text-[11px] font-semibold text-rose-700">
+                  Điểm số: {deleteTarget.score} / {deleteTarget.max_score} đ ({deleteTarget.percentage}%)
+                </div>
+              </div>
+              <p className="text-rose-700 font-medium">
+                Dữ liệu bài làm và điểm số sẽ bị xóa hoàn toàn khỏi bảng điểm và thống kê của kỳ thi.
+              </p>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setDeleteTarget(null);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs flex items-center space-x-1.5 cursor-pointer disabled:bg-rose-400"
+              >
+                <Trash2 className={`w-3.5 h-3.5 ${isDeleting ? 'animate-spin' : ''}`} />
+                <span>{isDeleting ? 'Đang xóa...' : 'Xác nhận Xóa vĩnh viễn'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

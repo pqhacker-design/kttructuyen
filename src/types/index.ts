@@ -354,6 +354,34 @@ export interface ExamResult {
   review_questions?: ExamResultQuestionReview[];
 }
 
+export interface ExamAuditLogEvent {
+  time: string;
+  type: 'start' | 'save' | 'submit' | 'integrity' | 'system' | 'warning';
+  title: string;
+  description: string;
+}
+
+export interface ExamAuditLog {
+  attemptId: string;
+  studentName: string;
+  studentCode: string;
+  sessionTitle?: string;
+  sessionAccessCode?: string;
+  durationMinutes?: number;
+  startedAt?: string;
+  submittedAt?: string;
+  timeSpentSeconds?: number;
+  status: string;
+  score: number;
+  maxScore: number;
+  percentage: number;
+  correctCount: number;
+  wrongCount: number;
+  unansweredCount: number;
+  timelineEvents: ExamAuditLogEvent[];
+  questions: ExamResultQuestionReview[];
+}
+
 // Cognitive level display mapping (Chuẩn GDPT 2018 Việt Nam)
 export const COGNITIVE_LEVEL_LABELS: Record<CognitiveLevel, { label: string; color: string; badgeClass: string }> = {
   recognition: {
