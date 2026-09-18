@@ -26,6 +26,12 @@ const PORT = 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+function isUUID(str: string | null | undefined): boolean {
+  if (!str || typeof str !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str.trim()) ||
+         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+}
+
 // Initialize Google GenAI with user-supplied API key (enforce per-user API key)
 function getGenAIClient(userApiKey?: string): GoogleGenAI | null {
   const apiKey = userApiKey?.trim();
@@ -1212,7 +1218,9 @@ app.post('/api/exam-sessions/join', async (req, res) => {
     }
 
     // Check if teacher explicitly allowed retake for this student
-    const isRetakeAllowed = serverExamStore.isStudentAllowedRetake(session.id, cleanStudentCode);
+    const isRetakeAllowed =
+      serverExamStore.isStudentAllowedRetake(session.id, cleanStudentCode) ||
+      (session.access_code && serverExamStore.isStudentAllowedRetake(session.access_code, cleanStudentCode));
 
     if (!isRetakeAllowed) {
       // Check prior submitted attempts
@@ -1225,7 +1233,8 @@ app.post('/api/exam-sessions/join', async (req, res) => {
           .select('*')
           .eq('exam_session_id', session.id)
           .ilike('student_code', cleanStudentCode)
-          .in('status', ['submitted', 'graded']);
+          .in('status', ['submitted', 'graded'])
+          .neq('status', 'cancelled');
 
         submittedCount = (pastAttempts || []).length;
         if (pastAttempts && pastAttempts.length > 0) {
@@ -1657,21 +1666,70 @@ app.post('/api/exam-sessions/:sessionId/sync-attempts', async (req, res) => {
 app.delete('/api/exam-sessions/:sessionId/results/:resultId', async (req, res) => {
   try {
     const { sessionId, resultId } = req.params;
-    const attemptId = req.query.attemptId as string | undefined;
+    const attemptId = (req.query.attemptId as string || req.body?.attemptId as string || '').trim();
+    const studentCode = (req.query.studentCode as string || req.body?.studentCode as string || '').trim().toUpperCase();
 
     // 1. Delete from in-memory server store & mark eligible for retake
-    serverExamStore.deleteResult(sessionId, resultId, attemptId);
+    serverExamStore.deleteResult(sessionId, resultId, attemptId || undefined, studentCode || undefined);
+    if (studentCode) {
+      serverExamStore.allowRetake(sessionId, studentCode, attemptId || undefined);
+    }
 
     // 2. Delete from Supabase if configured
     const admin = getSupabaseAdmin();
     if (admin) {
-      if (attemptId) {
-        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0 }).eq('id', attemptId);
-        await admin.from('attempt_answers').delete().eq('attempt_id', attemptId);
-        await admin.from('exam_results').delete().eq('attempt_id', attemptId);
-        await admin.from('exam_attempts').delete().eq('id', attemptId);
+      const attemptIdsToDelete = new Set<string>();
+      const resultIdsToDelete = new Set<string>();
+
+      if (attemptId && isUUID(attemptId)) {
+        attemptIdsToDelete.add(attemptId);
       }
-      await admin.from('exam_results').delete().eq('id', resultId);
+
+      if (resultId && isUUID(resultId)) {
+        resultIdsToDelete.add(resultId);
+      } else if (resultId && resultId.startsWith('res-')) {
+        const raw = resultId.replace(/^res-/, '');
+        if (isUUID(raw)) {
+          attemptIdsToDelete.add(raw);
+        }
+      }
+
+      if (studentCode) {
+        const { data: matchedAttempts } = await admin
+          .from('exam_attempts')
+          .select('id')
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', studentCode);
+
+        for (const a of (matchedAttempts || [])) {
+          if (a.id && isUUID(a.id)) attemptIdsToDelete.add(a.id);
+        }
+
+        const { data: matchedResults } = await admin
+          .from('exam_results')
+          .select('id, attempt_id')
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', studentCode);
+
+        for (const r of (matchedResults || [])) {
+          if (r.id && isUUID(r.id)) resultIdsToDelete.add(r.id);
+          if (r.attempt_id && isUUID(r.attempt_id)) attemptIdsToDelete.add(r.attempt_id);
+        }
+      }
+
+      const attArr = Array.from(attemptIdsToDelete);
+      const resArr = Array.from(resultIdsToDelete);
+
+      if (attArr.length > 0) {
+        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', attArr);
+        await admin.from('attempt_answers').delete().in('attempt_id', attArr);
+        await admin.from('exam_results').delete().in('attempt_id', attArr);
+        await admin.from('exam_attempts').delete().in('id', attArr);
+      }
+
+      if (resArr.length > 0) {
+        await admin.from('exam_results').delete().in('id', resArr);
+      }
     }
 
     res.json({ success: true, message: 'Đã xóa kết quả thi thành công' });
@@ -1685,46 +1743,95 @@ app.delete('/api/exam-sessions/:sessionId/results/:resultId', async (req, res) =
 app.post('/api/exam-sessions/:sessionId/allow-retake', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const { studentCode, attemptId } = req.body;
+    const studentCode = (req.body?.studentCode || req.query?.studentCode || '').trim().toUpperCase();
+    const attemptId = (req.body?.attemptId || req.query?.attemptId || '').trim();
 
     // 1. Reset in server memory store & register retake permission
     if (studentCode) {
-      serverExamStore.allowRetake(sessionId, studentCode, attemptId);
+      serverExamStore.allowRetake(sessionId, studentCode, attemptId || undefined);
     }
 
     // 2. Clear in Supabase
     const admin = getSupabaseAdmin();
     if (admin) {
-      if (attemptId) {
-        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0 }).eq('id', attemptId);
-        await admin.from('attempt_answers').delete().eq('attempt_id', attemptId);
-        await admin.from('exam_results').delete().eq('attempt_id', attemptId);
-        await admin.from('exam_attempts').delete().eq('id', attemptId);
-      } else if (studentCode) {
-        await admin
-          .from('exam_attempts')
-          .update({ status: 'cancelled', score: 0 })
-          .eq('exam_session_id', sessionId)
-          .ilike('student_code', studentCode.trim());
+      const attemptIdsToDelete = new Set<string>();
 
-        const { data: attempts } = await admin
+      if (attemptId && isUUID(attemptId)) {
+        attemptIdsToDelete.add(attemptId);
+      }
+
+      if (studentCode) {
+        const { data: matchedAttempts } = await admin
           .from('exam_attempts')
           .select('id')
           .eq('exam_session_id', sessionId)
-          .ilike('student_code', studentCode.trim());
+          .ilike('student_code', studentCode);
 
-        const ids = (attempts || []).map((a: any) => a.id);
-        if (ids.length > 0) {
-          await admin.from('attempt_answers').delete().in('attempt_id', ids);
-          await admin.from('exam_results').delete().in('attempt_id', ids);
-          await admin.from('exam_attempts').delete().in('id', ids);
+        for (const a of (matchedAttempts || [])) {
+          if (a.id && isUUID(a.id)) attemptIdsToDelete.add(a.id);
         }
+
+        const { data: matchedResults } = await admin
+          .from('exam_results')
+          .select('id, attempt_id')
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', studentCode);
+
+        for (const r of (matchedResults || [])) {
+          if (r.attempt_id && isUUID(r.attempt_id)) attemptIdsToDelete.add(r.attempt_id);
+          if (r.id && isUUID(r.id)) {
+            await admin.from('exam_results').delete().eq('id', r.id);
+          }
+        }
+      }
+
+      const attArr = Array.from(attemptIdsToDelete);
+      if (attArr.length > 0) {
+        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', attArr);
+        await admin.from('attempt_answers').delete().in('attempt_id', attArr);
+        await admin.from('exam_results').delete().in('attempt_id', attArr);
+        await admin.from('exam_attempts').delete().in('id', attArr);
       }
     }
 
     res.json({ success: true, message: 'Đã cấp quyền làm lại bài thi thành công' });
   } catch (err: any) {
     console.error('Error granting retake permission:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/students/:studentCode/clear-history - Wipe all exam history for a student (e.g. when student deleted or recreated)
+app.post('/api/students/:studentCode/clear-history', async (req, res) => {
+  try {
+    const studentCode = (req.params.studentCode || '').trim().toUpperCase();
+    if (!studentCode) {
+      return res.status(400).json({ success: false, error: 'Thiếu mã học sinh' });
+    }
+
+    serverExamStore.clearStudentAllData(studentCode);
+
+    const admin = getSupabaseAdmin();
+    if (admin) {
+      const { data: attempts } = await admin
+        .from('exam_attempts')
+        .select('id')
+        .ilike('student_code', studentCode);
+
+      const ids = (attempts || []).map((a: any) => a.id).filter(isUUID);
+      if (ids.length > 0) {
+        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', ids);
+        await admin.from('attempt_answers').delete().in('attempt_id', ids);
+        await admin.from('exam_results').delete().in('attempt_id', ids);
+        await admin.from('exam_attempts').delete().in('id', ids);
+      }
+
+      await admin.from('exam_results').delete().ilike('student_code', studentCode);
+    }
+
+    res.json({ success: true, message: 'Đã xóa toàn bộ lịch sử thi của học sinh' });
+  } catch (err: any) {
+    console.error('Error clearing student exam history:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

@@ -1,4 +1,5 @@
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
+import { isUUID } from '../lib/idUtils';
 import { ExamResult, ExamAuditLog, ExamAuditLogEvent } from '../types';
 import { mockStore } from './mockStore';
 
@@ -318,14 +319,24 @@ export async function fetchStudentHistory(studentCode?: string): Promise<ExamRes
 export async function deleteExamResult(
   sessionId: string,
   resultId: string,
-  attemptId?: string
+  attemptId?: string,
+  studentCode?: string
 ): Promise<{ success: boolean; message?: string }> {
+  const cleanCode = (studentCode || '').trim().toUpperCase();
+
   // 1. Delete from local mockStore
   mockStore.deleteResult(resultId, attemptId);
+  if (cleanCode) {
+    mockStore.resetStudentAttempt(sessionId, cleanCode, attemptId);
+  }
 
   // 2. Call server API
   try {
-    const q = attemptId ? `?attemptId=${encodeURIComponent(attemptId)}` : '';
+    const qParts: string[] = [];
+    if (attemptId) qParts.push(`attemptId=${encodeURIComponent(attemptId)}`);
+    if (cleanCode) qParts.push(`studentCode=${encodeURIComponent(cleanCode)}`);
+    const q = qParts.length > 0 ? `?${qParts.join('&')}` : '';
+
     await fetch(`/api/exam-sessions/${encodeURIComponent(sessionId)}/results/${encodeURIComponent(resultId)}${q}`, {
       method: 'DELETE',
     });
@@ -337,20 +348,64 @@ export async function deleteExamResult(
   if (isSupabaseConfigured()) {
     try {
       const supabase = getSupabase();
-      if (attemptId) {
-        // Mark as cancelled first so RPC join checks immediately pass even before delete finishes
-        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).eq('id', attemptId);
-        await supabase.from('attempt_answers').delete().eq('attempt_id', attemptId);
-        await supabase.from('exam_results').delete().eq('attempt_id', attemptId);
-        await supabase.from('exam_attempts').delete().eq('id', attemptId);
+      const attemptIds = new Set<string>();
+      const resultIds = new Set<string>();
+
+      if (attemptId && isUUID(attemptId)) {
+        attemptIds.add(attemptId);
       }
-      await supabase.from('exam_results').delete().eq('id', resultId);
+
+      if (resultId && isUUID(resultId)) {
+        resultIds.add(resultId);
+      } else if (resultId && resultId.startsWith('res-')) {
+        const raw = resultId.replace(/^res-/, '');
+        if (isUUID(raw)) {
+          attemptIds.add(raw);
+        }
+      }
+
+      if (cleanCode) {
+        const { data: atts } = await supabase
+          .from('exam_attempts')
+          .select('id')
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', cleanCode);
+
+        for (const a of (atts || [])) {
+          if (a.id && isUUID(a.id)) attemptIds.add(a.id);
+        }
+
+        const { data: resList } = await supabase
+          .from('exam_results')
+          .select('id, attempt_id')
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', cleanCode);
+
+        for (const r of (resList || [])) {
+          if (r.id && isUUID(r.id)) resultIds.add(r.id);
+          if (r.attempt_id && isUUID(r.attempt_id)) attemptIds.add(r.attempt_id);
+        }
+      }
+
+      const attList = Array.from(attemptIds);
+      const resList = Array.from(resultIds);
+
+      if (attList.length > 0) {
+        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', attList);
+        await supabase.from('attempt_answers').delete().in('attempt_id', attList);
+        await supabase.from('exam_results').delete().in('attempt_id', attList);
+        await supabase.from('exam_attempts').delete().in('id', attList);
+      }
+
+      if (resList.length > 0) {
+        await supabase.from('exam_results').delete().in('id', resList);
+      }
 
       // Attempt RPC if available
       try {
         await supabase.rpc('delete_exam_result', {
-          p_result_id: resultId,
-          p_attempt_id: attemptId || null,
+          p_result_id: isUUID(resultId) ? resultId : null,
+          p_attempt_id: (attemptId && isUUID(attemptId)) ? attemptId : null,
         });
       } catch {}
     } catch (e) {
@@ -358,7 +413,7 @@ export async function deleteExamResult(
     }
   }
 
-  return { success: true };
+  return { success: true, message: 'Đã xóa kết quả thi thành công' };
 }
 
 /**
@@ -369,15 +424,17 @@ export async function allowStudentRetake(
   studentCode: string,
   attemptId?: string
 ): Promise<{ success: boolean; message?: string }> {
+  const cleanCode = (studentCode || '').trim().toUpperCase();
+
   // 1. Update local mockStore
-  mockStore.resetStudentAttempt(sessionId, studentCode, attemptId);
+  mockStore.resetStudentAttempt(sessionId, cleanCode, attemptId);
 
   // 2. Call server API
   try {
     await fetch(`/api/exam-sessions/${encodeURIComponent(sessionId)}/allow-retake`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentCode, attemptId }),
+      body: JSON.stringify({ studentCode: cleanCode, attemptId }),
     });
   } catch (e) {}
 
@@ -385,38 +442,51 @@ export async function allowStudentRetake(
   if (isSupabaseConfigured()) {
     try {
       const supabase = getSupabase();
-      if (attemptId) {
-        // Mark as cancelled first to clear join locks
-        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).eq('id', attemptId);
-        await supabase.from('attempt_answers').delete().eq('attempt_id', attemptId);
-        await supabase.from('exam_results').delete().eq('attempt_id', attemptId);
-        await supabase.from('exam_attempts').delete().eq('id', attemptId);
-      } else if (studentCode) {
-        await supabase
-          .from('exam_attempts')
-          .update({ status: 'cancelled', score: 0, percentage: 0 })
-          .eq('exam_session_id', sessionId)
-          .ilike('student_code', studentCode.trim());
+      const attemptIds = new Set<string>();
 
+      if (attemptId && isUUID(attemptId)) {
+        attemptIds.add(attemptId);
+      }
+
+      if (cleanCode) {
         const { data: atts } = await supabase
           .from('exam_attempts')
           .select('id')
           .eq('exam_session_id', sessionId)
-          .ilike('student_code', studentCode.trim());
-        const ids = (atts || []).map((a: any) => a.id);
-        if (ids.length > 0) {
-          await supabase.from('attempt_answers').delete().in('attempt_id', ids);
-          await supabase.from('exam_results').delete().in('attempt_id', ids);
-          await supabase.from('exam_attempts').delete().in('id', ids);
+          .ilike('student_code', cleanCode);
+
+        for (const a of (atts || [])) {
+          if (a.id && isUUID(a.id)) attemptIds.add(a.id);
         }
+
+        const { data: resList } = await supabase
+          .from('exam_results')
+          .select('id, attempt_id')
+          .eq('exam_session_id', sessionId)
+          .ilike('student_code', cleanCode);
+
+        for (const r of (resList || [])) {
+          if (r.attempt_id && isUUID(r.attempt_id)) attemptIds.add(r.attempt_id);
+          if (r.id && isUUID(r.id)) {
+            await supabase.from('exam_results').delete().eq('id', r.id);
+          }
+        }
+      }
+
+      const attList = Array.from(attemptIds);
+      if (attList.length > 0) {
+        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', attList);
+        await supabase.from('attempt_answers').delete().in('attempt_id', attList);
+        await supabase.from('exam_results').delete().in('attempt_id', attList);
+        await supabase.from('exam_attempts').delete().in('id', attList);
       }
 
       // Attempt RPC if available
       try {
         await supabase.rpc('allow_student_retake', {
           p_session_id: sessionId,
-          p_student_code: studentCode,
-          p_attempt_id: attemptId || null,
+          p_student_code: cleanCode,
+          p_attempt_id: (attemptId && isUUID(attemptId)) ? attemptId : null,
         });
       } catch {}
     } catch (e) {
@@ -425,6 +495,52 @@ export async function allowStudentRetake(
   }
 
   return { success: true, message: 'Đã cấp quyền làm lại bài thi thành công' };
+}
+
+/**
+ * Xóa sạch toàn bộ lịch sử thi của học sinh trên tất cả các kỳ thi
+ * (được gọi khi học sinh bị xóa hoặc tạo mới cùng SBD)
+ */
+export async function clearStudentExamHistory(studentCode: string): Promise<boolean> {
+  const cleanCode = (studentCode || '').trim().toUpperCase();
+  if (!cleanCode) return true;
+
+  // 1. mockStore
+  const allSessions = mockStore.getSessions();
+  for (const s of allSessions) {
+    mockStore.resetStudentAttempt(s.id, cleanCode);
+  }
+
+  // 2. Call server API
+  try {
+    await fetch(`/api/students/${encodeURIComponent(cleanCode)}/clear-history`, {
+      method: 'POST',
+    });
+  } catch (e) {}
+
+  // 3. Supabase direct
+  if (isSupabaseConfigured()) {
+    try {
+      const supabase = getSupabase();
+      const { data: atts } = await supabase
+        .from('exam_attempts')
+        .select('id')
+        .ilike('student_code', cleanCode);
+
+      const ids = (atts || []).map((a: any) => a.id).filter(isUUID);
+      if (ids.length > 0) {
+        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', ids);
+        await supabase.from('attempt_answers').delete().in('attempt_id', ids);
+        await supabase.from('exam_results').delete().in('attempt_id', ids);
+        await supabase.from('exam_attempts').delete().in('id', ids);
+      }
+      await supabase.from('exam_results').delete().ilike('student_code', cleanCode);
+    } catch (e) {
+      console.warn('Error clearing student exam history in Supabase:', e);
+    }
+  }
+
+  return true;
 }
 
 /**

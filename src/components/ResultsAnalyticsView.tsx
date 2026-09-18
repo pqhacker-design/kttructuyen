@@ -248,7 +248,7 @@ export const ResultsAnalyticsView: React.FC<ResultsAnalyticsViewProps> = ({
     if (!deleteTarget || !selectedSessionId) return;
     setIsDeleting(true);
     try {
-      await deleteExamResult(selectedSessionId, deleteTarget.id, deleteTarget.attempt_id);
+      await deleteExamResult(selectedSessionId, deleteTarget.id, deleteTarget.attempt_id, deleteTarget.student_code);
 
       // Also reset student attempt eligibility so student can retake if needed
       if (deleteTarget.student_code) {

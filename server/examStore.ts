@@ -371,20 +371,38 @@ class ExamStore {
 
   public isStudentAllowedRetake(sessionId: string, studentCode: string): boolean {
     const cleanCode = (studentCode || '').trim().toUpperCase();
+    if (!cleanCode) return false;
+
     const session = this.getSessionById(sessionId) || this.getSessionByCode(sessionId);
-    const keysToCheck = [sessionId];
-    if (session?.id) keysToCheck.push(session.id);
-    if (session?.access_code) keysToCheck.push(session.access_code.trim().toUpperCase());
+    const keysToCheck = new Set<string>([sessionId]);
+    if (session?.id) keysToCheck.add(session.id);
+    if (session?.access_code) keysToCheck.add(session.access_code.trim().toUpperCase());
 
     for (const key of keysToCheck) {
       const set = this.allowedRetakes.get(key);
       if (set && set.has(cleanCode)) return true;
     }
+
+    // Also check across all registered sessions
+    for (const [key, set] of this.allowedRetakes.entries()) {
+      if (set.has(cleanCode)) {
+        if (
+          key === sessionId ||
+          key === '*' ||
+          (session && (key === session.id || key === session.access_code?.trim().toUpperCase()))
+        ) {
+          return true;
+        }
+      }
+    }
+
     return false;
   }
 
   public allowRetake(sessionId: string, studentCode: string, attemptId?: string) {
     const cleanCode = (studentCode || '').trim().toUpperCase();
+    if (!cleanCode) return;
+
     const session = this.getSessionById(sessionId) || this.getSessionByCode(sessionId);
     const keysToRegister = new Set<string>([sessionId]);
     if (session?.id) keysToRegister.add(session.id);
@@ -409,8 +427,7 @@ class ExamStore {
     }
 
     // Remove matching result from server memory
-    const keys = Array.from(keysToRegister);
-    for (const k of keys) {
+    for (const k of keysToRegister) {
       const curResults = this.results.get(k) || [];
       const filtered = curResults.filter(
         (r) =>
@@ -422,8 +439,13 @@ class ExamStore {
     this.saveToDisk();
   }
 
-  public deleteResult(sessionId: string, resultId: string, attemptId?: string) {
-    let studentCode = '';
+  public deleteResult(
+    sessionId: string,
+    resultId: string,
+    attemptId?: string,
+    explicitStudentCode?: string
+  ) {
+    let studentCode = (explicitStudentCode || '').trim().toUpperCase();
     const session = this.getSessionById(sessionId) || this.getSessionByCode(sessionId);
     const keysToRegister = new Set<string>([sessionId]);
     if (session?.id) keysToRegister.add(session.id);
@@ -432,12 +454,15 @@ class ExamStore {
     for (const k of keysToRegister) {
       const curResults = this.results.get(k) || [];
       const target = curResults.find((r) => r.id === resultId || r.attempt_id === attemptId);
-      if (target?.student_code) {
+      if (target?.student_code && !studentCode) {
         studentCode = target.student_code.trim().toUpperCase();
       }
 
       const filtered = curResults.filter(
-        (r) => r.id !== resultId && (!attemptId || r.attempt_id !== attemptId)
+        (r) =>
+          r.id !== resultId &&
+          (!attemptId || r.attempt_id !== attemptId) &&
+          (!studentCode || (r.student_code || '').trim().toUpperCase() !== studentCode)
       );
       this.results.set(k, filtered);
     }
@@ -447,14 +472,46 @@ class ExamStore {
       this.answers.delete(attemptId);
     }
 
-    // Also mark as eligible for retake if student wants to try again
+    // Also remove matching attempts and grant retake permission
     if (studentCode) {
+      for (const [id, att] of this.attempts.entries()) {
+        if (
+          (att.exam_session_id === sessionId || (session && att.exam_session_id === session.id)) &&
+          (att.student_code || '').trim().toUpperCase() === studentCode
+        ) {
+          this.attempts.delete(id);
+          this.answers.delete(id);
+        }
+      }
+
       for (const k of keysToRegister) {
         if (!this.allowedRetakes.has(k)) {
           this.allowedRetakes.set(k, new Set());
         }
         this.allowedRetakes.get(k)!.add(studentCode);
       }
+    }
+    this.saveToDisk();
+  }
+
+  public clearStudentAllData(studentCode: string) {
+    const cleanCode = (studentCode || '').trim().toUpperCase();
+    if (!cleanCode) return;
+
+    for (const [id, att] of this.attempts.entries()) {
+      if ((att.student_code || '').trim().toUpperCase() === cleanCode) {
+        this.attempts.delete(id);
+        this.answers.delete(id);
+      }
+    }
+
+    for (const [k, list] of this.results.entries()) {
+      const filtered = list.filter((r) => (r.student_code || '').trim().toUpperCase() !== cleanCode);
+      this.results.set(k, filtered);
+    }
+
+    for (const set of this.allowedRetakes.values()) {
+      set.add(cleanCode);
     }
     this.saveToDisk();
   }
@@ -479,13 +536,7 @@ class ExamStore {
     studentCode: string
   ): ExamAttempt {
     const cleanCode = (studentCode || '').trim().toUpperCase();
-    const id = `att-${sessionId.slice(0, 8)}-${cleanCode}-${Date.now()}`;
-
-    // Remove retake permission once new attempt is created
-    const set = this.allowedRetakes.get(sessionId);
-    if (set) {
-      set.delete(cleanCode);
-    }
+    const id = crypto.randomUUID();
 
     const attempt: ExamAttempt = {
       id,

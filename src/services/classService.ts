@@ -2,6 +2,7 @@ import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 import { SchoolClass, Student, DEFAULT_ACADEMIC_YEAR } from '../types';
 import { mockStore } from './mockStore';
 import { isUUID } from '../lib/idUtils';
+import { clearStudentExamHistory } from './resultService';
 
 export async function fetchClasses(teacherId?: string): Promise<SchoolClass[]> {
   if (!isSupabaseConfigured()) {
@@ -287,37 +288,69 @@ export async function addBulkStudents(studentsList: {
 }
 
 export async function deleteClass(classId: string): Promise<boolean> {
+  const localStudents = mockStore.getStudents(classId);
+  const studentCodes = new Set<string>(localStudents.map((s) => (s.student_code || '').trim().toUpperCase()).filter(Boolean));
+
   mockStore.deleteClass(classId);
-  if (!isSupabaseConfigured() || !isUUID(classId)) {
-    return true;
-  }
-  try {
-    const supabase = getSupabase();
-    const { error } = await supabase.from('classes').delete().eq('id', classId);
-    if (error) {
-      console.warn('Error deleting class from Supabase:', error.message);
+
+  if (isSupabaseConfigured() && isUUID(classId)) {
+    try {
+      const supabase = getSupabase();
+      const { data: dbStudents } = await supabase.from('students').select('student_code').eq('class_id', classId);
+      for (const s of (dbStudents || [])) {
+        if (s.student_code) {
+          studentCodes.add(s.student_code.trim().toUpperCase());
+        }
+      }
+      const { error } = await supabase.from('classes').delete().eq('id', classId);
+      if (error) {
+        console.warn('Error deleting class from Supabase:', error.message);
+      }
+    } catch (err) {
+      console.warn('Network error deleting class from Supabase:', err);
     }
-    return true;
-  } catch (err) {
-    return true;
   }
+
+  // Clear exam history for all students previously in this class so re-creating them doesn't block them
+  for (const code of Array.from(studentCodes)) {
+    await clearStudentExamHistory(code);
+  }
+
+  return true;
 }
 
 export async function deleteStudent(studentId: string): Promise<boolean> {
+  let studentCode = '';
+  const localStudent = mockStore.getStudents().find((s) => s.id === studentId);
+  if (localStudent?.student_code) {
+    studentCode = localStudent.student_code.trim().toUpperCase();
+  }
+
   mockStore.deleteStudent(studentId);
-  if (!isSupabaseConfigured() || !isUUID(studentId)) {
-    return true;
-  }
-  try {
-    const supabase = getSupabase();
-    const { error } = await supabase.from('students').delete().eq('id', studentId);
-    if (error) {
-      console.warn('Error deleting student from Supabase:', error.message);
+
+  if (isSupabaseConfigured() && isUUID(studentId)) {
+    try {
+      const supabase = getSupabase();
+      if (!studentCode) {
+        const { data: sData } = await supabase.from('students').select('student_code').eq('id', studentId).maybeSingle();
+        if (sData?.student_code) {
+          studentCode = sData.student_code.trim().toUpperCase();
+        }
+      }
+      const { error } = await supabase.from('students').delete().eq('id', studentId);
+      if (error) {
+        console.warn('Error deleting student from Supabase:', error.message);
+      }
+    } catch (err) {
+      console.warn('Network error deleting student from Supabase:', err);
     }
-    return true;
-  } catch (err) {
-    return true;
   }
+
+  if (studentCode) {
+    await clearStudentExamHistory(studentCode);
+  }
+
+  return true;
 }
 
 export async function createStudent(student: {
@@ -326,6 +359,13 @@ export async function createStudent(student: {
   date_of_birth?: string;
   class_id?: string;
 }): Promise<Student | null> {
+  const cleanCode = (student.student_code || '').trim().toUpperCase();
+
+  // If re-creating a student with existing code, wipe prior zombie attempt records
+  if (cleanCode) {
+    await clearStudentExamHistory(cleanCode);
+  }
+
   if (!isSupabaseConfigured()) {
     return mockStore.addStudent({
       student_code: student.student_code,
@@ -359,6 +399,13 @@ export async function batchImportStudents(
   classId: string,
   students: { student_code: string; full_name: string; date_of_birth?: string }[]
 ): Promise<number> {
+  // Clear any old history for these student codes
+  for (const s of students) {
+    if (s.student_code) {
+      await clearStudentExamHistory(s.student_code);
+    }
+  }
+
   if (!isSupabaseConfigured()) {
     for (const s of students) {
       mockStore.addStudent({

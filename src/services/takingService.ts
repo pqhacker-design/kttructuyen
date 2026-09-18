@@ -398,7 +398,7 @@ export async function joinExamWithAccessCode(
     .ilike('student_code', studentCode.trim());
 
   const submittedCount = (prevAttempts || []).filter(
-    (a) => a.status === 'submitted' || a.status === 'graded'
+    (a) => (a.status === 'submitted' || a.status === 'graded') && a.status !== 'cancelled'
   ).length;
 
   let isRetakePermittedInDb = false;
@@ -410,9 +410,11 @@ export async function joinExamWithAccessCode(
     }
   } catch {}
 
-  if (!isRetakePermittedInDb && submittedCount >= session.max_attempts) {
+  if (isRetakePermittedInDb) {
+    mockStore.resetStudentAttempt(session.id, studentCode.trim());
+  } else if (submittedCount >= session.max_attempts) {
     const lastSubmitted = (prevAttempts || [])
-      .filter((a) => a.status === 'submitted' || a.status === 'graded')
+      .filter((a) => (a.status === 'submitted' || a.status === 'graded') && a.status !== 'cancelled')
       .pop();
 
     return {
@@ -429,8 +431,10 @@ export async function joinExamWithAccessCode(
     };
   }
 
-  // Check if there is an in-progress attempt to resume
-  let activeAttempt = (prevAttempts || []).find((a) => a.status === 'in_progress');
+  // Check if there is an in-progress attempt to resume (unless teacher explicitly allowed retake)
+  let activeAttempt = isRetakePermittedInDb
+    ? undefined
+    : (prevAttempts || []).find((a) => a.status === 'in_progress');
 
   if (!activeAttempt) {
     // Create new attempt
@@ -441,7 +445,7 @@ export async function joinExamWithAccessCode(
           exam_session_id: session.id,
           student_name: studentName.trim(),
           student_code: studentCode.trim(),
-          attempt_number: (prevAttempts?.length || 0) + 1,
+          attempt_number: isRetakePermittedInDb ? 1 : ((prevAttempts?.length || 0) + 1),
           status: 'in_progress',
           started_at: new Date().toISOString(),
         },
