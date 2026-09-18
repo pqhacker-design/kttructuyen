@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { Exam, ExamSession, ExamAttempt, ExamResult, ExamResultQuestionReview } from '../src/types';
 
 // In-Memory Shared Store on Server for cross-browser coordination
@@ -183,6 +185,9 @@ const DEMO_QUESTIONS: ServerExamQuestion[] = [
   },
 ];
 
+const DATA_DIR = path.join(process.cwd(), 'server', 'data');
+const STORE_FILE = path.join(DATA_DIR, 'exam_store.json');
+
 class ExamStore {
   private exams = new Map<string, ServerExam>();
   private sessions = new Map<string, any>();
@@ -194,6 +199,77 @@ class ExamStore {
 
   constructor() {
     this.seedDemoData();
+    this.loadFromDisk();
+  }
+
+  private loadFromDisk() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      if (fs.existsSync(STORE_FILE)) {
+        const raw = fs.readFileSync(STORE_FILE, 'utf-8');
+        if (raw && raw.trim()) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed.exams)) {
+            for (const [k, v] of parsed.exams) {
+              if (v && v.id) this.exams.set(k, v);
+            }
+          }
+          if (Array.isArray(parsed.sessions)) {
+            for (const [k, v] of parsed.sessions) {
+              if (v && v.id) {
+                this.sessions.set(k, v);
+                if (v.access_code) {
+                  this.sessionsByCode.set(v.access_code.trim().toUpperCase(), k);
+                }
+              }
+            }
+          }
+          if (Array.isArray(parsed.attempts)) {
+            for (const [k, v] of parsed.attempts) {
+              this.attempts.set(k, v);
+            }
+          }
+          if (Array.isArray(parsed.answers)) {
+            for (const [k, v] of parsed.answers) {
+              this.answers.set(k, v);
+            }
+          }
+          if (Array.isArray(parsed.results)) {
+            for (const [k, v] of parsed.results) {
+              this.results.set(k, v);
+            }
+          }
+          if (Array.isArray(parsed.allowedRetakes)) {
+            for (const [k, v] of parsed.allowedRetakes) {
+              this.allowedRetakes.set(k, new Set(v));
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Could not load exam store from disk:', err);
+    }
+  }
+
+  public saveToDisk() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const dataToSave = {
+        exams: Array.from(this.exams.entries()),
+        sessions: Array.from(this.sessions.entries()),
+        attempts: Array.from(this.attempts.entries()),
+        answers: Array.from(this.answers.entries()),
+        results: Array.from(this.results.entries()),
+        allowedRetakes: Array.from(this.allowedRetakes.entries()).map(([k, s]) => [k, Array.from(s)]),
+      };
+      fs.writeFileSync(STORE_FILE, JSON.stringify(dataToSave, null, 2), 'utf-8');
+    } catch (err) {
+      console.warn('Could not save exam store to disk:', err);
+    }
   }
 
   private seedDemoData() {
@@ -232,6 +308,7 @@ class ExamStore {
       ...examData,
       questions: examData.questions || [],
     });
+    this.saveToDisk();
   }
 
   public saveSession(session: any, examData?: any, questionsData?: ServerExamQuestion[]) {
@@ -266,6 +343,7 @@ class ExamStore {
     if (cleanedCode) {
       this.sessionsByCode.set(cleanedCode, sessionId);
     }
+    this.saveToDisk();
   }
 
   public getSessionByCode(code: string): any | null {
@@ -341,6 +419,7 @@ class ExamStore {
       );
       this.results.set(k, filtered);
     }
+    this.saveToDisk();
   }
 
   public deleteResult(sessionId: string, resultId: string, attemptId?: string) {
@@ -377,6 +456,7 @@ class ExamStore {
         this.allowedRetakes.get(k)!.add(studentCode);
       }
     }
+    this.saveToDisk();
   }
 
   public getAttemptsByStudent(sessionId: string, studentCode: string): ExamAttempt[] {
@@ -420,6 +500,7 @@ class ExamStore {
     };
 
     this.attempts.set(id, attempt);
+    this.saveToDisk();
     return attempt;
   }
 
@@ -432,6 +513,7 @@ class ExamStore {
       this.answers.set(attemptId, {});
     }
     this.answers.get(attemptId)![questionId] = answer;
+    this.saveToDisk();
   }
 
   public getAnswers(attemptId: string): Record<string, any> {
@@ -456,6 +538,7 @@ class ExamStore {
     } else {
       list.unshift(result);
     }
+    this.saveToDisk();
   }
 
   // ACCURATE SERVER-AUTHORITATIVE GRADING ENGINE
