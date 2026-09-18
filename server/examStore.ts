@@ -27,6 +27,7 @@ interface ServerExamQuestion {
     normalized_answer: string;
     accepted_variants?: string[];
   };
+  correct_option_id?: string;
   correct_answer?: string;
   explanation?: string;
   sub_items?: {
@@ -302,11 +303,48 @@ class ExamStore {
     this.saveSession(demoSession, demoExam, DEMO_QUESTIONS);
   }
 
+  public normalizeQuestions(rawList: any[]): ServerExamQuestion[] {
+    if (!Array.isArray(rawList)) return [];
+    return rawList.map((item: any, idx: number) => {
+      const q = item.question || item;
+      const opts = (q.options || item.options || []).map((o: any, oIdx: number) => ({
+        id: o.id || `opt-${oIdx + 1}`,
+        content: o.content || o.text || '',
+        is_correct: Boolean(o.is_correct),
+        option_order: o.option_order || o.order || (oIdx + 1),
+      }));
+
+      const stmts = (q.statements || item.statements || []).map((s: any, sIdx: number) => ({
+        id: s.id || `st-${sIdx + 1}`,
+        statement: s.statement || s.content || '',
+        is_correct: Boolean(s.is_correct),
+        explanation: s.explanation,
+      }));
+
+      return {
+        id: q.id || item.question_id || item.id || `q-${idx + 1}`,
+        order: item.question_order || q.order || (idx + 1),
+        content: q.content || item.content || '',
+        question_type: q.question_type || item.question_type || 'single_choice',
+        exam_part: q.exam_part || item.exam_part || (stmts.length > 0 ? 2 : (q.short_answer ? 3 : (q.question_type === 'essay' ? 4 : 1))),
+        points: Number(item.points ?? q.points ?? 1.0),
+        cognitive_level: q.cognitive_level || item.cognitive_level || 'recognition',
+        options: opts,
+        statements: stmts,
+        short_answer: q.short_answer || item.short_answer,
+        correct_answer: q.correct_answer || item.correct_answer,
+        explanation: q.explanation || item.explanation,
+        sub_items: q.sub_items || item.sub_items,
+      };
+    });
+  }
+
   public saveExam(examData: any) {
     if (!examData || !examData.id) return;
+    const normalized = this.normalizeQuestions(examData.questions || []);
     this.exams.set(examData.id, {
       ...examData,
-      questions: examData.questions || [],
+      questions: normalized.length > 0 ? normalized : (examData.questions || []),
     });
     this.saveToDisk();
   }
@@ -316,12 +354,13 @@ class ExamStore {
     const sessionId = session.id;
 
     const exam = examData || session.exam;
-    const questions = questionsData || exam?.questions || session.questions || [];
+    const rawQuestions = questionsData || exam?.questions || session.questions || [];
+    const normalizedQuestions = this.normalizeQuestions(rawQuestions);
 
     if (exam && exam.id) {
       this.exams.set(exam.id, {
         ...exam,
-        questions,
+        questions: normalizedQuestions.length > 0 ? normalizedQuestions : (exam.questions || []),
       });
     } else if (session.exam_id) {
       this.exams.set(session.exam_id, {
@@ -329,7 +368,7 @@ class ExamStore {
         title: session.title,
         duration_minutes: session.duration_minutes,
         total_points: session.total_points || 10,
-        questions,
+        questions: normalizedQuestions,
       });
     }
 
@@ -451,9 +490,9 @@ class ExamStore {
     if (session?.id) keysToRegister.add(session.id);
     if (session?.access_code) keysToRegister.add(session.access_code.trim().toUpperCase());
 
-    for (const k of keysToRegister) {
-      const curResults = this.results.get(k) || [];
-      const target = curResults.find((r) => r.id === resultId || r.attempt_id === attemptId);
+    // 1. Purge across all stored result lists
+    for (const [k, curResults] of this.results.entries()) {
+      const target = curResults.find((r) => r.id === resultId || (attemptId && r.attempt_id === attemptId));
       if (target?.student_code && !studentCode) {
         studentCode = target.student_code.trim().toUpperCase();
       }
@@ -467,23 +506,23 @@ class ExamStore {
       this.results.set(k, filtered);
     }
 
+    // 2. Remove matching attempts and answers
     if (attemptId) {
       this.attempts.delete(attemptId);
       this.answers.delete(attemptId);
     }
 
-    // Also remove matching attempts and grant retake permission
-    if (studentCode) {
-      for (const [id, att] of this.attempts.entries()) {
-        if (
-          (att.exam_session_id === sessionId || (session && att.exam_session_id === session.id)) &&
-          (att.student_code || '').trim().toUpperCase() === studentCode
-        ) {
-          this.attempts.delete(id);
-          this.answers.delete(id);
-        }
+    for (const [id, att] of this.attempts.entries()) {
+      const isMatchId = id === attemptId || (resultId && resultId.endsWith(id));
+      const isMatchStudent = studentCode && (att.student_code || '').trim().toUpperCase() === studentCode;
+      if (isMatchId || isMatchStudent) {
+        this.attempts.delete(id);
+        this.answers.delete(id);
       }
+    }
 
+    // 3. Register retake permission across session keys
+    if (studentCode) {
       for (const k of keysToRegister) {
         if (!this.allowedRetakes.has(k)) {
           this.allowedRetakes.set(k, new Set());
@@ -616,13 +655,24 @@ class ExamStore {
     }
 
     const exam = this.getExam(session.exam_id) || (fallbackExamId ? this.getExam(fallbackExamId) : null);
-    let questions: ServerExamQuestion[] = exam?.questions || [];
+    let questions: ServerExamQuestion[] = this.normalizeQuestions(exam?.questions || []);
+
+    // Check if client provided fallback questions with more data (e.g. answer keys or populated questions)
+    if (fallbackQuestions && fallbackQuestions.length > 0) {
+      const normFallback = this.normalizeQuestions(fallbackQuestions);
+      const hasAnswerKeys = (list: ServerExamQuestion[]) =>
+        list.some((q) => (q.options || []).some((o) => o.is_correct) || (q.statements || []).some((s) => s.is_correct));
+
+      if (!questions.length || (!hasAnswerKeys(questions) && hasAnswerKeys(normFallback))) {
+        questions = normFallback;
+      }
+    }
 
     // If no questions found or question IDs don't match student's answers, look across all stored exams
     const answerQuestionIds = Object.keys(userAnswers || {});
     if (answerQuestionIds.length > 0 && (!questions.length || !questions.some((q) => answerQuestionIds.includes(q.id)))) {
       for (const ex of this.exams.values()) {
-        const exQuestions = ex.questions || [];
+        const exQuestions = this.normalizeQuestions(ex.questions || []);
         if (exQuestions.some((q) => answerQuestionIds.includes(q.id))) {
           questions = exQuestions;
           break;
@@ -632,12 +682,12 @@ class ExamStore {
 
     // If still empty and client provided fallback questions
     if ((!questions || questions.length === 0) && fallbackQuestions && fallbackQuestions.length > 0) {
-      questions = fallbackQuestions;
+      questions = this.normalizeQuestions(fallbackQuestions);
     }
 
     // Last resort fallback
     if (!questions || questions.length === 0) {
-      questions = this.exams.values().next().value?.questions || DEMO_QUESTIONS;
+      questions = this.normalizeQuestions(this.exams.values().next().value?.questions || DEMO_QUESTIONS);
     }
 
     let totalPoints = 0;
@@ -811,9 +861,32 @@ class ExamStore {
       }
 
       // 4. Single Choice / Multiple Choice (Part I)
-      const isAnswered = Boolean(userAns?.selected_option_id);
-      const correctOpt = (q.options || []).find((o) => o.is_correct);
-      const isCorrect = isAnswered && correctOpt && userAns?.selected_option_id === correctOpt.id;
+      const selectedId =
+        userAns?.selected_option_id ||
+        (typeof userAns?.answer_text === 'string' && !userAns.answer_text.startsWith('{')
+          ? userAns.answer_text.trim()
+          : undefined);
+      const isAnswered = Boolean(selectedId || (userAns?.selected_option_ids && userAns.selected_option_ids.length > 0));
+
+      let correctOpt = (q.options || []).find((o) => o.is_correct);
+      if (!correctOpt && q.correct_option_id) {
+        correctOpt = (q.options || []).find((o) => o.id === q.correct_option_id);
+      }
+      if (!correctOpt && q.correct_answer) {
+        const ca = String(q.correct_answer).trim();
+        correctOpt = (q.options || []).find(
+          (o) => o.id === ca || o.content?.trim() === ca
+        );
+      }
+
+      const isCorrect =
+        isAnswered &&
+        Boolean(
+          correctOpt &&
+            (selectedId === correctOpt.id ||
+              (userAns?.selected_option_ids && userAns.selected_option_ids.includes(correctOpt.id)) ||
+              (selectedId && selectedId.toLowerCase() === correctOpt.content?.trim().toLowerCase()))
+        );
 
       if (!isAnswered) {
         unansweredCount++;
@@ -843,7 +916,7 @@ class ExamStore {
         points: qPoints,
         earned_points: isCorrect ? qPoints : 0,
         is_answered: true,
-        user_selected_option_id: userAns?.selected_option_id,
+        user_selected_option_id: selectedId,
         correct_option_id: correctOpt?.id,
         explanation: q.explanation || 'Theo kiến thức trọng tâm bài học.',
         options: (q.options || []).map((o) => ({

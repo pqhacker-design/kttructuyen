@@ -382,7 +382,8 @@ export const ExamTakingView: React.FC<ExamTakingViewProps> = ({
   if (examResult) {
     const fullReviewList = examResult.review_questions || [];
     // User request: "Khi HS nộp bài, Chỉ hiển thị câu hỏi và đáp án của câu hỏi đã làm, các câu chưa làm thì không hiển thị."
-    const reviewList = fullReviewList.filter((rq: any) => rq.is_answered === true);
+    const answeredOnly = fullReviewList.filter((rq: any) => rq.is_answered === true);
+    const reviewList = answeredOnly.length > 0 ? answeredOnly : fullReviewList;
     const hiddenCount = fullReviewList.length - reviewList.length;
 
     return (
@@ -403,7 +404,7 @@ export const ExamTakingView: React.FC<ExamTakingViewProps> = ({
             </p>
           </div>
 
-          {session?.show_result_after_submit ? (
+          {session?.show_result_after_submit !== false ? (
             <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200/80 space-y-4">
               <div>
                 <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Điểm số đạt được</span>
@@ -454,7 +455,7 @@ export const ExamTakingView: React.FC<ExamTakingViewProps> = ({
         </div>
 
         {/* Question Review Section (Detailed Answers) */}
-        {session?.show_result_after_submit && (
+        {session?.show_result_after_submit !== false && (
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-2">
               <div>

@@ -977,6 +977,18 @@ app.get('/api/exam-access/:code', async (req, res) => {
           .eq('exam_id', session.exam_id)
           .order('order_index', { ascending: true });
 
+        const fullServerQuestions = (examQuestions || []).map((eq: any) => {
+          const q = eq.questions;
+          if (!q) return null;
+          return {
+            ...q,
+            points: eq.points || q.points || 1.0,
+            order: eq.order_index,
+          };
+        }).filter(Boolean);
+
+        serverExamStore.saveSession(session, exam, fullServerQuestions);
+
         const sanitizedQuestions = (examQuestions || []).map((eq: any) => {
           const q = eq.questions;
           if (!q) return null;
@@ -986,12 +998,14 @@ app.get('/api/exam-access/:code', async (req, res) => {
             id: opt.id,
             label: opt.label,
             content: opt.content,
+            option_order: opt.option_order,
           }));
 
           const sanitizedStatements = (q.statements || []).map((st: any) => ({
             id: st.id,
             label: st.label,
-            content: st.content,
+            content: st.content || st.statement,
+            statement: st.statement || st.content,
           }));
 
           return {
@@ -1014,7 +1028,11 @@ app.get('/api/exam-access/:code', async (req, res) => {
             title: session.title,
             access_code: session.access_code,
             duration_minutes: session.duration_minutes,
+            max_attempts: session.max_attempts || 1,
             status: session.status,
+            show_result_after_submit: session.show_result_after_submit !== false,
+            shuffle_questions: Boolean(session.shuffle_questions),
+            shuffle_options: Boolean(session.shuffle_options),
           },
           exam: exam || { title: session.title },
           questions: sanitizedQuestions,
@@ -1183,7 +1201,17 @@ app.post('/api/exam-sessions/join', async (req, res) => {
           .eq('exam_id', session.exam_id)
           .order('order_index', { ascending: true });
 
-        questions = (eqs || []).map((eq: any) => eq.questions).filter(Boolean);
+        questions = (eqs || []).map((eq: any) => {
+          const q = eq.questions;
+          if (!q) return null;
+          return {
+            ...q,
+            points: eq.points || q.points || 1.0,
+            order: eq.order_index,
+          };
+        }).filter(Boolean);
+
+        serverExamStore.saveSession(session, exam, questions);
       }
     }
 
@@ -1347,14 +1375,68 @@ app.post('/api/exam-sessions/:sessionId/submit', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Thiếu attemptId' });
     }
 
+    const admin = getSupabaseAdmin();
+    const storeSession = serverExamStore.getSessionById(sessionId) || serverExamStore.getSessionByCode(sessionId);
+    let realSessionId = storeSession?.id || sessionId;
+    let resolvedExamId = examId || storeSession?.exam_id;
+    let authoritativeQuestions = questions;
+
+    if (admin) {
+      try {
+        if (!isUUID(realSessionId)) {
+          const { data: dbSess } = await admin
+            .from('exam_sessions')
+            .select('id, exam_id')
+            .or(`id.eq.${sessionId},access_code.eq.${sessionId}`)
+            .maybeSingle();
+          if (dbSess?.id) {
+            realSessionId = dbSess.id;
+            if (dbSess.exam_id) resolvedExamId = dbSess.exam_id;
+          }
+        }
+
+        if (resolvedExamId) {
+          const { data: eqs } = await admin
+            .from('exam_questions')
+            .select('*, questions(*)')
+            .eq('exam_id', resolvedExamId)
+            .order('order_index', { ascending: true });
+
+          if (eqs && eqs.length > 0) {
+            const dbQuestions = eqs
+              .map((eq: any) => {
+                const q = eq.questions;
+                if (!q) return null;
+                return {
+                  ...q,
+                  points: eq.points || q.points || 1.0,
+                  order: eq.order_index,
+                };
+              })
+              .filter(Boolean);
+
+            if (dbQuestions.length > 0) {
+              authoritativeQuestions = dbQuestions;
+              serverExamStore.saveExam({
+                id: resolvedExamId,
+                questions: dbQuestions,
+              });
+            }
+          }
+        }
+      } catch (qErr) {
+        console.warn('Supabase question prefetch warning:', qErr);
+      }
+    }
+
     const grading = serverExamStore.gradeAndSubmit(
       attemptId,
-      sessionId,
+      realSessionId,
       answers || {},
       studentName,
       studentCode,
-      examId,
-      questions
+      resolvedExamId,
+      authoritativeQuestions
     );
 
     if (!grading.success || !grading.result) {
@@ -1367,7 +1449,6 @@ app.post('/api/exam-sessions/:sessionId/submit', async (req, res) => {
     const result = grading.result;
 
     // Persist to Supabase if admin is configured
-    const admin = getSupabaseAdmin();
     if (admin) {
       try {
         await admin
@@ -1381,22 +1462,24 @@ app.post('/api/exam-sessions/:sessionId/submit', async (req, res) => {
           })
           .eq('id', attemptId);
 
-        await admin.from('exam_results').upsert(
-          {
-            attempt_id: attemptId,
-            exam_session_id: sessionId,
-            student_name: result.student_name,
-            student_code: result.student_code,
-            score: result.score,
-            max_score: result.max_score,
-            percentage: result.percentage,
-            correct_count: result.correct_count,
-            wrong_count: result.wrong_count,
-            unanswered_count: result.unanswered_count,
-            submitted_at: result.submitted_at,
-          },
-          { onConflict: 'attempt_id' }
-        );
+        if (isUUID(realSessionId)) {
+          await admin.from('exam_results').upsert(
+            {
+              attempt_id: attemptId,
+              exam_session_id: realSessionId,
+              student_name: result.student_name,
+              student_code: result.student_code,
+              score: result.score,
+              max_score: result.max_score,
+              percentage: result.percentage,
+              correct_count: result.correct_count,
+              wrong_count: result.wrong_count,
+              unanswered_count: result.unanswered_count,
+              submitted_at: result.submitted_at,
+            },
+            { onConflict: 'attempt_id' }
+          );
+        }
       } catch (dbErr) {
         console.warn('Supabase persistence warning during grading:', dbErr);
       }
@@ -1721,7 +1804,6 @@ app.delete('/api/exam-sessions/:sessionId/results/:resultId', async (req, res) =
       const resArr = Array.from(resultIdsToDelete);
 
       if (attArr.length > 0) {
-        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', attArr);
         await admin.from('attempt_answers').delete().in('attempt_id', attArr);
         await admin.from('exam_results').delete().in('attempt_id', attArr);
         await admin.from('exam_attempts').delete().in('id', attArr);
@@ -1787,7 +1869,6 @@ app.post('/api/exam-sessions/:sessionId/allow-retake', async (req, res) => {
 
       const attArr = Array.from(attemptIdsToDelete);
       if (attArr.length > 0) {
-        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', attArr);
         await admin.from('attempt_answers').delete().in('attempt_id', attArr);
         await admin.from('exam_results').delete().in('attempt_id', attArr);
         await admin.from('exam_attempts').delete().in('id', attArr);
@@ -1820,7 +1901,6 @@ app.post('/api/students/:studentCode/clear-history', async (req, res) => {
 
       const ids = (attempts || []).map((a: any) => a.id).filter(isUUID);
       if (ids.length > 0) {
-        await admin.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', ids);
         await admin.from('attempt_answers').delete().in('attempt_id', ids);
         await admin.from('exam_results').delete().in('attempt_id', ids);
         await admin.from('exam_attempts').delete().in('id', ids);

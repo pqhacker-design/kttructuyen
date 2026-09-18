@@ -391,7 +391,6 @@ export async function deleteExamResult(
       const resList = Array.from(resultIds);
 
       if (attList.length > 0) {
-        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', attList);
         await supabase.from('attempt_answers').delete().in('attempt_id', attList);
         await supabase.from('exam_results').delete().in('attempt_id', attList);
         await supabase.from('exam_attempts').delete().in('id', attList);
@@ -475,7 +474,6 @@ export async function allowStudentRetake(
 
       const attList = Array.from(attemptIds);
       if (attList.length > 0) {
-        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', attList);
         await supabase.from('attempt_answers').delete().in('attempt_id', attList);
         await supabase.from('exam_results').delete().in('attempt_id', attList);
         await supabase.from('exam_attempts').delete().in('id', attList);
@@ -529,7 +527,6 @@ export async function clearStudentExamHistory(studentCode: string): Promise<bool
 
       const ids = (atts || []).map((a: any) => a.id).filter(isUUID);
       if (ids.length > 0) {
-        await supabase.from('exam_attempts').update({ status: 'cancelled', score: 0, percentage: 0 }).in('id', ids);
         await supabase.from('attempt_answers').delete().in('attempt_id', ids);
         await supabase.from('exam_results').delete().in('attempt_id', ids);
         await supabase.from('exam_attempts').delete().in('id', ids);
